@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Block-You</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="app-header">
+      <h1>Block-You</h1>
+      <p class="tagline">Mobile-friendly Blokus-inspired strategy game</p>
+    </header>
+    <main class="app-main">
+      <section class="controls" aria-label="Game setup">
+        <div class="control-row">
+          <label for="player-count">Players</label>
+          <select id="player-count">
+            <option value="4">4 Players</option>
+            <option value="3">3 Players</option>
+            <option value="2">2 Players</option>
+          </select>
+        </div>
+        <div class="control-row" id="unused-color-row" hidden>
+          <label for="unused-color">Unused Color</label>
+          <select id="unused-color">
+            <option value="Blue">Blue</option>
+            <option value="Yellow" selected>Yellow</option>
+            <option value="Red">Red</option>
+            <option value="Green">Green</option>
+          </select>
+        </div>
+        <button id="start-button" class="primary">Start / Reset Game</button>
+      </section>
+      <section class="status-panel" aria-live="polite">
+        <div class="status-line">
+          <strong>Turn:</strong>
+          <span id="turn-indicator">—</span>
+        </div>
+        <div class="status-line">
+          <strong>Selected Piece:</strong>
+          <span id="selected-piece">None</span>
+        </div>
+        <div class="status-line">
+          <strong>Action:</strong>
+          <span id="action-message">Start a new game to play.</span>
+        </div>
+        <div class="button-group">
+          <button id="rotate-left" class="secondary" title="Rotate counter-clockwise">⟲ Rotate</button>
+          <button id="rotate-right" class="secondary" title="Rotate clockwise">⟳ Rotate</button>
+          <button id="flip" class="secondary" title="Flip horizontally">⇆ Flip</button>
+          <button id="pass" class="secondary">Pass Turn</button>
+        </div>
+      </section>
+      <section class="board-section" aria-label="Game board">
+        <div class="board" id="board" role="grid" aria-label="Block-You board"></div>
+      </section>
+      <section class="inventory" aria-label="Piece inventory">
+        <h2>Available Pieces</h2>
+        <div id="inventory-grid" class="inventory-grid"></div>
+      </section>
+      <section class="scoreboard" aria-label="Scoreboard">
+        <h2>Scores</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>Color</th>
+              <th>Remaining Squares</th>
+              <th>Bonus</th>
+              <th>Total</th>
+            </tr>
+          </thead>
+          <tbody id="score-rows"></tbody>
+        </table>
+      </section>
+      <section class="log" aria-label="Game log">
+        <h2>Game Log</h2>
+        <ol id="game-log"></ol>
+      </section>
+    </main>
+    <footer class="app-footer">
+      <p>Rule complete implementation per official Blokus corner and edge rules.</p>
+    </footer>
+    <script type="module" src="./src/main.js"></script>
+  </body>
+</html>
