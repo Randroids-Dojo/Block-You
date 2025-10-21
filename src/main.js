@@ -41,6 +41,12 @@ const initialState = () => ({
 
 let state = initialState();
 
+let previewCells = [];
+let activePointerId = null;
+let activePreviewAnchor = null;
+let suppressNextClick = false;
+let statusBeforePreview = null;
+
 function resetState() {
   state = initialState();
 }
@@ -66,6 +72,8 @@ function setBoardCellColor(x, y, colorName) {
   const index = y * BOARD_SIZE + x;
   const cell = boardEl.children[index];
   if (cell) {
+    delete cell.dataset.preview;
+    cell.style.removeProperty('--preview-color');
     if (colorName) {
       cell.dataset.color = colorName;
     } else {
@@ -82,8 +90,67 @@ function updateBoardUI() {
   });
 }
 
+function getBoardCell(x, y) {
+  const index = y * BOARD_SIZE + x;
+  return boardEl.children[index] ?? null;
+}
+
+function clearPreview(restoreStatus = true) {
+  if (previewCells.length) {
+    previewCells.forEach(({ x, y }) => {
+      const cell = getBoardCell(x, y);
+      if (cell) {
+        delete cell.dataset.preview;
+        cell.style.removeProperty('--preview-color');
+      }
+    });
+    previewCells = [];
+  }
+  if (restoreStatus && statusBeforePreview !== null) {
+    updateStatus(statusBeforePreview);
+    statusBeforePreview = null;
+  }
+}
+
+function showPlacementPreview(x, y) {
+  if (!state.selectedPiece || !state.selectedOrientation) return;
+  if (statusBeforePreview === null) {
+    statusBeforePreview = actionMessageEl.textContent;
+  }
+  clearPreview(false);
+  const color = getCurrentColor();
+  if (!color) return;
+  const placement = state.selectedOrientation.map(([dx, dy]) => ({ x: x + dx, y: y + dy }));
+  const validity = validatePlacement(color, state.selectedPiece, placement);
+  const colorConfig = getColorConfig(color);
+  previewCells = placement;
+  placement.forEach(({ x: cellX, y: cellY }) => {
+    const cell = getBoardCell(cellX, cellY);
+    if (cell) {
+      cell.dataset.preview = validity.valid ? 'valid' : 'invalid';
+      if (colorConfig) {
+        cell.style.setProperty('--preview-color', colorConfig.cssVar);
+      }
+    }
+  });
+  if (validity.valid) {
+    updateStatus(`Release to place ${state.selectedPiece}.`);
+  } else {
+    updateStatus(validity.reason);
+  }
+}
+
+function resetPreviewState() {
+  activePointerId = null;
+  activePreviewAnchor = null;
+}
+
 function initializeGame() {
   resetState();
+  clearPreview();
+  resetPreviewState();
+  suppressNextClick = false;
+  statusBeforePreview = null;
   const count = Number(playerCountSelect.value);
   let activeColors;
   if (count === 4) {
@@ -215,6 +282,126 @@ function handleBoardClick(x, y) {
   applyPlacement(color, state.selectedPiece, placement);
 }
 
+function getCellFromPoint(clientX, clientY) {
+  const element = document.elementFromPoint(clientX, clientY);
+  return element ? element.closest('.board-cell') : null;
+}
+
+function parseCellCoordinates(cellEl) {
+  return {
+    x: Number(cellEl?.dataset.x ?? NaN),
+    y: Number(cellEl?.dataset.y ?? NaN),
+  };
+}
+
+function handleBoardPointerDown(event) {
+  if (event.pointerType === 'mouse') return;
+  if (state.gameOver) return;
+  const cell = event.target.closest('.board-cell');
+  if (!cell) return;
+  if (!state.selectedPiece) {
+    updateStatus('Select a piece before placing.');
+    return;
+  }
+  if (!state.selectedOrientation) {
+    updateStatus('Orientation not ready. Please reselect the piece.');
+    return;
+  }
+  suppressNextClick = false;
+  const coords = parseCellCoordinates(cell);
+  if (Number.isNaN(coords.x) || Number.isNaN(coords.y)) return;
+  activePointerId = event.pointerId;
+  activePreviewAnchor = coords;
+  event.preventDefault();
+  if (typeof event.target.setPointerCapture === 'function') {
+    try {
+      event.target.setPointerCapture(event.pointerId);
+    } catch (err) {
+      // noop if capture is not available
+    }
+  }
+  showPlacementPreview(coords.x, coords.y);
+}
+
+function handleBoardPointerMove(event) {
+  if (event.pointerType === 'mouse') return;
+  if (activePointerId !== event.pointerId) return;
+  event.preventDefault();
+  const cell = getCellFromPoint(event.clientX, event.clientY);
+  if (!cell) {
+    clearPreview(false);
+    activePreviewAnchor = null;
+    if (statusBeforePreview !== null) {
+      updateStatus(statusBeforePreview);
+    }
+    return;
+  }
+  const coords = parseCellCoordinates(cell);
+  if (Number.isNaN(coords.x) || Number.isNaN(coords.y)) return;
+  if (!activePreviewAnchor || activePreviewAnchor.x !== coords.x || activePreviewAnchor.y !== coords.y) {
+    activePreviewAnchor = coords;
+    showPlacementPreview(coords.x, coords.y);
+  }
+}
+
+function handleBoardPointerUp(event) {
+  if (event.pointerType === 'mouse') return;
+  if (activePointerId !== event.pointerId) return;
+  const cell = getCellFromPoint(event.clientX, event.clientY);
+  if (cell && state.selectedOrientation) {
+    const coords = parseCellCoordinates(cell);
+    if (!Number.isNaN(coords.x) && !Number.isNaN(coords.y)) {
+      suppressNextClick = true;
+      statusBeforePreview = null;
+      clearPreview(false);
+      resetPreviewState();
+      if (typeof event.target.releasePointerCapture === 'function') {
+        try {
+          event.target.releasePointerCapture(event.pointerId);
+        } catch (err) {
+          // ignore release failures
+        }
+      }
+      event.preventDefault();
+      handleBoardClick(coords.x, coords.y);
+      setTimeout(() => {
+        suppressNextClick = false;
+      }, 0);
+      return;
+    }
+  }
+  resetPreviewState();
+  clearPreview();
+  if (typeof event.target.releasePointerCapture === 'function') {
+    try {
+      event.target.releasePointerCapture(event.pointerId);
+    } catch (err) {
+      // ignore release failures
+    }
+  }
+}
+
+function handleBoardPointerCancel(event) {
+  if (event.pointerType === 'mouse') return;
+  if (activePointerId !== event.pointerId) return;
+  resetPreviewState();
+  clearPreview();
+  if (typeof event.target.releasePointerCapture === 'function') {
+    try {
+      event.target.releasePointerCapture(event.pointerId);
+    } catch (err) {
+      // ignore release failures
+    }
+  }
+}
+
+function handleBoardClickSuppression(event) {
+  if (!suppressNextClick) return;
+  event.preventDefault();
+  event.stopImmediatePropagation();
+  suppressNextClick = false;
+}
+
 function validatePlacement(color, pieceId, cells) {
   const colorConfig = getColorConfig(color);
   const firstMove = !state.firstMoveCompleted[color];
@@ -333,6 +520,9 @@ function rotateSelectedPiece(direction) {
   }
   state.selectedOrientation = orientations[state.selectedOrientationIndex];
   updateSelectedPieceLabel();
+  if (activePreviewAnchor) {
+    showPlacementPreview(activePreviewAnchor.x, activePreviewAnchor.y);
+  }
 }
 
 function flipSelectedPiece() {
@@ -354,6 +544,9 @@ function flipSelectedPiece() {
     state.selectedOrientation = orientations[state.selectedOrientationIndex];
   }
   updateSelectedPieceLabel();
+  if (activePreviewAnchor) {
+    showPlacementPreview(activePreviewAnchor.x, activePreviewAnchor.y);
+  }
 }
 
 function handlePass() {
@@ -485,6 +678,12 @@ rotateLeftBtn.addEventListener('click', () => rotateSelectedPiece('left'));
 rotateRightBtn.addEventListener('click', () => rotateSelectedPiece('right'));
 flipBtn.addEventListener('click', () => flipSelectedPiece());
 passBtn.addEventListener('click', handlePass);
+
+boardEl.addEventListener('pointerdown', handleBoardPointerDown);
+boardEl.addEventListener('pointermove', handleBoardPointerMove);
+boardEl.addEventListener('pointerup', handleBoardPointerUp);
+boardEl.addEventListener('pointercancel', handleBoardPointerCancel);
+boardEl.addEventListener('click', handleBoardClickSuppression, true);
 
 startButton.addEventListener('click', initializeGame);
 playerCountSelect.addEventListener('change', () => {
