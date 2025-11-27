@@ -44,7 +44,7 @@ let state = initialState();
 let previewCells = [];
 let activePointerId = null;
 let activePreviewAnchor = null;
-let suppressNextClick = false;
+let suppressClickUntil = 0;
 let statusBeforePreview = null;
 
 function resetState() {
@@ -149,7 +149,7 @@ function initializeGame() {
   resetState();
   clearPreview();
   resetPreviewState();
-  suppressNextClick = false;
+  suppressClickUntil = 0;
   statusBeforePreview = null;
   const count = Number(playerCountSelect.value);
   let activeColors;
@@ -307,15 +307,15 @@ function handleBoardPointerDown(event) {
     updateStatus('Orientation not ready. Please reselect the piece.');
     return;
   }
-  suppressNextClick = false;
   const coords = parseCellCoordinates(cell);
   if (Number.isNaN(coords.x) || Number.isNaN(coords.y)) return;
   activePointerId = event.pointerId;
   activePreviewAnchor = coords;
   event.preventDefault();
-  if (typeof event.target.setPointerCapture === 'function') {
+  // Capture pointer on boardEl for reliable event handling
+  if (typeof boardEl.setPointerCapture === 'function') {
     try {
-      event.target.setPointerCapture(event.pointerId);
+      boardEl.setPointerCapture(event.pointerId);
     } catch (err) {
       // noop if capture is not available
     }
@@ -347,38 +347,30 @@ function handleBoardPointerMove(event) {
 function handleBoardPointerUp(event) {
   if (event.pointerType === 'mouse') return;
   if (activePointerId !== event.pointerId) return;
+  // Release pointer capture from boardEl
+  if (typeof boardEl.releasePointerCapture === 'function') {
+    try {
+      boardEl.releasePointerCapture(event.pointerId);
+    } catch (err) {
+      // ignore release failures
+    }
+  }
   const cell = getCellFromPoint(event.clientX, event.clientY);
   if (cell && state.selectedOrientation) {
     const coords = parseCellCoordinates(cell);
     if (!Number.isNaN(coords.x) && !Number.isNaN(coords.y)) {
-      suppressNextClick = true;
+      // Suppress click events for 400ms to prevent double-firing on touch
+      suppressClickUntil = Date.now() + 400;
       statusBeforePreview = null;
       clearPreview(false);
       resetPreviewState();
-      if (typeof event.target.releasePointerCapture === 'function') {
-        try {
-          event.target.releasePointerCapture(event.pointerId);
-        } catch (err) {
-          // ignore release failures
-        }
-      }
       event.preventDefault();
       handleBoardClick(coords.x, coords.y);
-      setTimeout(() => {
-        suppressNextClick = false;
-      }, 0);
       return;
     }
   }
   resetPreviewState();
   clearPreview();
-  if (typeof event.target.releasePointerCapture === 'function') {
-    try {
-      event.target.releasePointerCapture(event.pointerId);
-    } catch (err) {
-      // ignore release failures
-    }
-  }
 }
 
 function handleBoardPointerCancel(event) {
@@ -386,9 +378,10 @@ function handleBoardPointerCancel(event) {
   if (activePointerId !== event.pointerId) return;
   resetPreviewState();
   clearPreview();
-  if (typeof event.target.releasePointerCapture === 'function') {
+  // Release pointer capture from boardEl
+  if (typeof boardEl.releasePointerCapture === 'function') {
     try {
-      event.target.releasePointerCapture(event.pointerId);
+      boardEl.releasePointerCapture(event.pointerId);
     } catch (err) {
       // ignore release failures
     }
@@ -396,10 +389,13 @@ function handleBoardPointerCancel(event) {
 }
 
 function handleBoardClickSuppression(event) {
-  if (!suppressNextClick) return;
-  event.preventDefault();
-  event.stopImmediatePropagation();
-  suppressNextClick = false;
+  // Suppress clicks that occur shortly after a touch placement
+  // This prevents double-firing from touch events synthesizing clicks
+  if (Date.now() < suppressClickUntil) {
+    event.preventDefault();
+    event.stopPropagation();
+    return;
+  }
 }
 
 function validatePlacement(color, pieceId, cells) {
