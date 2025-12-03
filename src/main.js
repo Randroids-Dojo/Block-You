@@ -23,6 +23,7 @@ const logList = document.querySelector('#game-log');
 const rotateLeftBtn = document.querySelector('#rotate-left');
 const rotateRightBtn = document.querySelector('#rotate-right');
 const flipBtn = document.querySelector('#flip');
+const confirmBtn = document.querySelector('#confirm');
 const passBtn = document.querySelector('#pass');
 
 const initialState = () => ({
@@ -467,7 +468,6 @@ function updateBoardGhost() {
   const firstCell = boardEl.querySelector('.board-cell');
   if (!firstCell) return;
   const cellRect = firstCell.getBoundingClientRect();
-  const boardRect = boardEl.getBoundingClientRect();
   const cellSize = cellRect.width;
   const gap = 2; // CSS gap
 
@@ -485,16 +485,28 @@ function updateBoardGhost() {
     ghostCell.style.height = `${cellSize}px`;
     ghostCell.style.left = `${cellX * (cellSize + gap)}px`;
     ghostCell.style.top = `${cellY * (cellSize + gap)}px`;
-    ghostCell.style.background = colorConfig?.cssVar ?? '#666';
+    ghostCell.style.setProperty('--ghost-color', colorConfig?.cssVar ?? '#666');
     ghostCell.dataset.valid = validity.valid ? 'true' : 'false';
     boardGhostEl.appendChild(ghostCell);
   });
 
-  // Update status message
-  if (validity.valid) {
-    updateStatus('Release to place, or drag to reposition.');
+  // Update status message based on state
+  updateGhostStatusMessage(validity);
+}
+
+function updateGhostStatusMessage(validity) {
+  if (isDraggingGhost) {
+    if (validity.valid) {
+      updateStatus('Release to position here.');
+    } else {
+      updateStatus(validity.reason);
+    }
   } else {
-    updateStatus(validity.reason);
+    if (validity.valid) {
+      updateStatus('Drag to reposition, or tap Confirm to place.');
+    } else {
+      updateStatus(`${validity.reason} Drag to a valid position.`);
+    }
   }
 }
 
@@ -552,7 +564,7 @@ function handleGhostPointerUp(event) {
   isDraggingGhost = false;
   ghostPointerId = null;
 
-  // Try to place if valid
+  // Update status message (don't auto-place, require confirmation)
   if (ghostAnchor && state.selectedPiece && state.selectedOrientation) {
     const color = getCurrentColor();
     const placement = state.selectedOrientation.map(([dx, dy]) => ({
@@ -560,12 +572,29 @@ function handleGhostPointerUp(event) {
       y: ghostAnchor.y + dy
     }));
     const validity = validatePlacement(color, state.selectedPiece, placement);
+    updateGhostStatusMessage(validity);
+  }
+}
 
-    if (validity.valid) {
-      removeBoardGhost();
-      applyPlacement(color, state.selectedPiece, placement);
-      suppressClickUntil = Date.now() + 400;
-    }
+function confirmPlacement() {
+  if (!ghostAnchor || !state.selectedPiece || !state.selectedOrientation) {
+    updateStatus('Select a piece first.');
+    return;
+  }
+
+  const color = getCurrentColor();
+  const placement = state.selectedOrientation.map(([dx, dy]) => ({
+    x: ghostAnchor.x + dx,
+    y: ghostAnchor.y + dy
+  }));
+  const validity = validatePlacement(color, state.selectedPiece, placement);
+
+  if (validity.valid) {
+    removeBoardGhost();
+    applyPlacement(color, state.selectedPiece, placement);
+    suppressClickUntil = Date.now() + 400;
+  } else {
+    updateStatus(validity.reason);
   }
 }
 
@@ -865,6 +894,7 @@ function endGame() {
 rotateLeftBtn.addEventListener('click', () => rotateSelectedPiece('left'));
 rotateRightBtn.addEventListener('click', () => rotateSelectedPiece('right'));
 flipBtn.addEventListener('click', () => flipSelectedPiece());
+confirmBtn.addEventListener('click', confirmPlacement);
 passBtn.addEventListener('click', handlePass);
 
 boardEl.addEventListener('pointerdown', handleBoardPointerDown);
