@@ -1,4 +1,5 @@
 import { PIECE_DEFINITIONS, getPieceOrientationsById, normalizeShape } from './pieces.js';
+import { networkManager } from './networking.js';
 
 const BOARD_SIZE = 20;
 
@@ -9,10 +10,39 @@ const COLORS = [
   { name: 'Green', corner: { x: 19, y: 19 }, cssVar: 'var(--green)' },
 ];
 
+// ========== DOM Elements ==========
+// Lobby elements
+const lobbyScreen = document.querySelector('#lobby-screen');
+const gameScreen = document.querySelector('#game-screen');
+const lobbyMenu = document.querySelector('#lobby-menu');
+const newGameBtn = document.querySelector('#new-game-btn');
+const joinGameBtn = document.querySelector('#join-game-btn');
+const newGameSetup = document.querySelector('#new-game-setup');
+const createGameBtn = document.querySelector('#create-game-btn');
+const backFromNewBtn = document.querySelector('#back-from-new');
+const hostWaiting = document.querySelector('#host-waiting');
+const roomCodeDisplay = document.querySelector('#room-code-display');
+const copyCodeBtn = document.querySelector('#copy-code-btn');
+const playersList = document.querySelector('#players-list');
+const waitingText = document.querySelector('#waiting-text');
+const startMultiplayerBtn = document.querySelector('#start-multiplayer-btn');
+const cancelHostBtn = document.querySelector('#cancel-host-btn');
+const joinGameSetup = document.querySelector('#join-game-setup');
+const roomCodeInput = document.querySelector('#room-code-input');
+const joinBtn = document.querySelector('#join-btn');
+const backFromJoinBtn = document.querySelector('#back-from-join');
+const clientWaiting = document.querySelector('#client-waiting');
+const yourColorBadge = document.querySelector('#your-color-badge');
+const clientPlayersList = document.querySelector('#client-players-list');
+const leaveGameBtn = document.querySelector('#leave-game-btn');
+const connectionStatus = document.querySelector('#connection-status');
+const connectionMessage = document.querySelector('#connection-message');
+const lobbyError = document.querySelector('#lobby-error');
+const errorMessage = document.querySelector('#error-message');
+const errorDismissBtn = document.querySelector('#error-dismiss-btn');
+
+// Game elements
 const playerCountSelect = document.querySelector('#player-count');
-const unusedColorRow = document.querySelector('#unused-color-row');
-const unusedColorSelect = document.querySelector('#unused-color');
-const startButton = document.querySelector('#start-button');
 const boardEl = document.querySelector('#board');
 const turnIndicator = document.querySelector('#turn-indicator');
 const selectedPieceEl = document.querySelector('#selected-piece');
@@ -25,7 +55,11 @@ const rotateRightBtn = document.querySelector('#rotate-right');
 const flipBtn = document.querySelector('#flip');
 const confirmBtn = document.querySelector('#confirm');
 const passBtn = document.querySelector('#pass');
+const yourColorIndicator = document.querySelector('#your-color-indicator');
+const roomCodeSmall = document.querySelector('#room-code-small');
+const leaveGameFooterBtn = document.querySelector('#leave-game-footer-btn');
 
+// ========== Game State ==========
 const initialState = () => ({
   board: Array.from({ length: BOARD_SIZE }, () => Array(BOARD_SIZE).fill(null)),
   activeColors: [],
@@ -41,6 +75,9 @@ const initialState = () => ({
 });
 
 let state = initialState();
+let isMultiplayer = false;
+let myColor = null;
+let expectedPlayerCount = 4;
 
 let previewCells = [];
 let activePointerId = null;
@@ -50,9 +87,427 @@ let statusBeforePreview = null;
 
 // Board ghost preview state
 let boardGhostEl = null;
-let ghostAnchor = null; // Current position of ghost on board
+let ghostAnchor = null;
 let isDraggingGhost = false;
 let ghostPointerId = null;
+
+// ========== Lobby Functions ==========
+function showLobbySection(sectionId) {
+  // Hide all sections
+  lobbyMenu.hidden = true;
+  newGameSetup.hidden = true;
+  hostWaiting.hidden = true;
+  joinGameSetup.hidden = true;
+  clientWaiting.hidden = true;
+  connectionStatus.hidden = true;
+  lobbyError.hidden = true;
+
+  // Show the requested section
+  const section = document.querySelector(`#${sectionId}`);
+  if (section) {
+    section.hidden = false;
+  }
+}
+
+function showError(message) {
+  errorMessage.textContent = message;
+  lobbyError.hidden = false;
+}
+
+function showConnecting(message = 'Connecting...') {
+  connectionMessage.textContent = message;
+  connectionStatus.hidden = false;
+}
+
+function hideConnecting() {
+  connectionStatus.hidden = true;
+}
+
+function updatePlayersList(assignments, listEl, localPeerId) {
+  listEl.innerHTML = '';
+  const colors = ['Blue', 'Yellow', 'Red', 'Green'];
+
+  colors.forEach(color => {
+    const peerId = Object.keys(assignments).find(id => assignments[id] === color);
+    if (peerId) {
+      const li = document.createElement('li');
+      const dot = document.createElement('span');
+      dot.className = 'player-color-dot';
+      dot.dataset.color = color;
+
+      const name = document.createElement('span');
+      name.className = 'player-name';
+      name.textContent = color;
+
+      li.appendChild(dot);
+      li.appendChild(name);
+
+      if (peerId === localPeerId) {
+        const youBadge = document.createElement('span');
+        youBadge.className = 'player-you';
+        youBadge.textContent = 'You';
+        li.appendChild(youBadge);
+      }
+
+      listEl.appendChild(li);
+    }
+  });
+}
+
+function updateHostWaitingRoom() {
+  const assignments = networkManager.playerAssignments;
+  const playerCount = Object.keys(assignments).length;
+  const neededPlayers = expectedPlayerCount;
+
+  updatePlayersList(assignments, playersList, networkManager.localPlayerId);
+
+  if (playerCount >= neededPlayers) {
+    waitingText.textContent = 'All players connected! Ready to start.';
+    startMultiplayerBtn.disabled = false;
+  } else {
+    waitingText.textContent = `Waiting for ${neededPlayers - playerCount} more player(s)...`;
+    startMultiplayerBtn.disabled = true;
+  }
+}
+
+function updateClientWaitingRoom() {
+  const assignments = networkManager.playerAssignments;
+  updatePlayersList(assignments, clientPlayersList, networkManager.localPlayerId);
+}
+
+// ========== Network Event Handlers ==========
+function setupNetworkHandlers() {
+  networkManager.onPlayerJoin = (peerId, color) => {
+    console.log(`Player joined: ${peerId} as ${color}`);
+    updateHostWaitingRoom();
+  };
+
+  networkManager.onPlayerLeave = (peerId, color) => {
+    console.log(`Player left: ${peerId} (${color})`);
+    if (isMultiplayer && !state.gameOver) {
+      // Player disconnected during game
+      updateStatus(`${color} disconnected from the game.`);
+    }
+    updateHostWaitingRoom();
+  };
+
+  networkManager.onPlayerAssignmentsUpdate = (assignments) => {
+    updateClientWaitingRoom();
+  };
+
+  networkManager.onGameStart = (gameState, playerAssignments) => {
+    console.log('Game starting!', gameState, playerAssignments);
+    myColor = networkManager.getMyColor();
+    startGameWithState(gameState);
+  };
+
+  networkManager.onStateUpdate = (newState) => {
+    applyNetworkState(newState);
+  };
+
+  networkManager.onPlayerAction = (action, peerId) => {
+    // Host processes actions
+    handlePlayerAction(action, peerId);
+  };
+
+  networkManager.onActionResult = (success, newState, reason) => {
+    if (success) {
+      applyNetworkState(newState);
+    } else {
+      updateStatus(reason || 'Action failed.');
+    }
+  };
+}
+
+// ========== Lobby Event Listeners ==========
+newGameBtn.addEventListener('click', () => {
+  showLobbySection('new-game-setup');
+});
+
+joinGameBtn.addEventListener('click', () => {
+  showLobbySection('join-game-setup');
+  roomCodeInput.value = '';
+  roomCodeInput.focus();
+});
+
+backFromNewBtn.addEventListener('click', () => {
+  showLobbySection('lobby-menu');
+});
+
+backFromJoinBtn.addEventListener('click', () => {
+  showLobbySection('lobby-menu');
+});
+
+createGameBtn.addEventListener('click', async () => {
+  expectedPlayerCount = Number(playerCountSelect.value);
+  showConnecting('Creating game...');
+
+  try {
+    setupNetworkHandlers();
+    const result = await networkManager.createGame(expectedPlayerCount);
+    hideConnecting();
+
+    roomCodeDisplay.textContent = result.roomCode;
+    myColor = result.assignedColor;
+    isMultiplayer = true;
+
+    updateHostWaitingRoom();
+    showLobbySection('host-waiting');
+  } catch (err) {
+    hideConnecting();
+    showError(err.message || 'Failed to create game');
+  }
+});
+
+copyCodeBtn.addEventListener('click', async () => {
+  const code = roomCodeDisplay.textContent;
+  try {
+    await navigator.clipboard.writeText(code);
+    copyCodeBtn.textContent = 'Copied!';
+    setTimeout(() => {
+      copyCodeBtn.textContent = 'Copy Code';
+    }, 2000);
+  } catch (err) {
+    // Fallback for browsers without clipboard API
+    const input = document.createElement('input');
+    input.value = code;
+    document.body.appendChild(input);
+    input.select();
+    document.execCommand('copy');
+    document.body.removeChild(input);
+    copyCodeBtn.textContent = 'Copied!';
+    setTimeout(() => {
+      copyCodeBtn.textContent = 'Copy Code';
+    }, 2000);
+  }
+});
+
+cancelHostBtn.addEventListener('click', () => {
+  networkManager.disconnect();
+  isMultiplayer = false;
+  myColor = null;
+  showLobbySection('lobby-menu');
+});
+
+joinBtn.addEventListener('click', async () => {
+  const code = roomCodeInput.value.trim().toUpperCase();
+  if (code.length !== 6) {
+    showError('Please enter a 6-character room code');
+    return;
+  }
+
+  showConnecting('Joining game...');
+
+  try {
+    setupNetworkHandlers();
+    const result = await networkManager.joinGame(code);
+    hideConnecting();
+
+    myColor = result.assignedColor;
+    isMultiplayer = true;
+    expectedPlayerCount = 4; // Will be updated when game starts
+
+    yourColorBadge.textContent = myColor;
+    yourColorBadge.dataset.color = myColor;
+    updateClientWaitingRoom();
+    showLobbySection('client-waiting');
+  } catch (err) {
+    hideConnecting();
+    showError(err.message || 'Failed to join game');
+  }
+});
+
+leaveGameBtn.addEventListener('click', () => {
+  networkManager.disconnect();
+  isMultiplayer = false;
+  myColor = null;
+  showLobbySection('lobby-menu');
+});
+
+errorDismissBtn.addEventListener('click', () => {
+  lobbyError.hidden = true;
+});
+
+startMultiplayerBtn.addEventListener('click', () => {
+  if (!networkManager.isHost) return;
+
+  // Initialize game state
+  const playerCount = Object.keys(networkManager.playerAssignments).length;
+  const activeColors = COLORS.slice(0, playerCount).map(c => c.name);
+
+  state = initialState();
+  state.activeColors = activeColors;
+  state.turnIndex = 0;
+  state.firstMoveCompleted = Object.fromEntries(activeColors.map(color => [color, false]));
+  state.usedPieces = Object.fromEntries(activeColors.map(color => [color, new Set()]));
+
+  // Broadcast game start to all clients
+  networkManager.startGame(serializeState());
+
+  // Start locally as host
+  startGameWithState(serializeState());
+});
+
+leaveGameFooterBtn.addEventListener('click', () => {
+  if (confirm('Are you sure you want to leave the game?')) {
+    leaveGame();
+  }
+});
+
+function leaveGame() {
+  networkManager.disconnect();
+  isMultiplayer = false;
+  myColor = null;
+  gameScreen.hidden = true;
+  lobbyScreen.hidden = false;
+  showLobbySection('lobby-menu');
+}
+
+// ========== Room code input handling ==========
+roomCodeInput.addEventListener('input', (e) => {
+  e.target.value = e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '');
+});
+
+roomCodeInput.addEventListener('keypress', (e) => {
+  if (e.key === 'Enter') {
+    joinBtn.click();
+  }
+});
+
+// ========== Game Functions ==========
+function serializeState() {
+  // Convert Sets to arrays for JSON serialization
+  const serialized = { ...state };
+  serialized.usedPieces = {};
+  for (const color in state.usedPieces) {
+    serialized.usedPieces[color] = Array.from(state.usedPieces[color]);
+  }
+  // Don't send selection state
+  serialized.selectedPiece = null;
+  serialized.selectedOrientation = null;
+  serialized.selectedOrientationIndex = null;
+  return serialized;
+}
+
+function deserializeState(serialized) {
+  const deserialized = { ...serialized };
+  deserialized.usedPieces = {};
+  for (const color in serialized.usedPieces) {
+    deserialized.usedPieces[color] = new Set(serialized.usedPieces[color]);
+  }
+  return deserialized;
+}
+
+function applyNetworkState(networkState) {
+  const newState = deserializeState(networkState);
+  state.board = newState.board;
+  state.activeColors = newState.activeColors;
+  state.turnIndex = newState.turnIndex;
+  state.firstMoveCompleted = newState.firstMoveCompleted;
+  state.usedPieces = newState.usedPieces;
+  state.passChain = newState.passChain;
+  state.log = newState.log;
+  state.gameOver = newState.gameOver;
+
+  // Clear local selection when state updates
+  state.selectedPiece = null;
+  state.selectedOrientation = null;
+  state.selectedOrientationIndex = null;
+  removeBoardGhost();
+  ghostAnchor = null;
+
+  // Update UI
+  updateBoardUI();
+  renderInventory();
+  renderScores();
+  renderLog();
+  updateTurnIndicator();
+
+  if (state.gameOver) {
+    const scores = computeScores();
+    const topScore = scores[0];
+    const winners = scores.filter(s => s.total === topScore.total).map(s => s.color);
+    if (winners.length === 1) {
+      updateStatus(`Game over! Winner: ${winners[0]} with ${topScore.total} points.`);
+    } else {
+      updateStatus(`Game over! Tie between ${winners.join(', ')} at ${topScore.total} points.`);
+    }
+  } else {
+    checkAutoPass();
+  }
+}
+
+function handlePlayerAction(action, peerId) {
+  // Host validates and processes actions
+  const playerColor = networkManager.playerAssignments[peerId];
+
+  if (!playerColor) {
+    networkManager.sendActionResult(peerId, false, null, 'Unknown player');
+    return;
+  }
+
+  const currentColor = getCurrentColor();
+  if (playerColor !== currentColor) {
+    networkManager.sendActionResult(peerId, false, null, 'Not your turn');
+    return;
+  }
+
+  if (action.type === 'place') {
+    const placement = action.cells;
+    const validity = validatePlacement(playerColor, action.pieceId, placement);
+
+    if (!validity.valid) {
+      networkManager.sendActionResult(peerId, false, null, validity.reason);
+      return;
+    }
+
+    // Apply placement
+    applyPlacementInternal(playerColor, action.pieceId, placement);
+
+    // Broadcast new state to all
+    networkManager.broadcastState(serializeState());
+    networkManager.sendActionResult(peerId, true, serializeState());
+
+  } else if (action.type === 'pass') {
+    if (hasLegalMove(playerColor)) {
+      networkManager.sendActionResult(peerId, false, null, 'You have legal moves available');
+      return;
+    }
+
+    state.log.push(`${playerColor} passed.`);
+    state.passChain += 1;
+
+    if (state.passChain >= state.activeColors.length) {
+      endGame();
+    } else {
+      advanceTurnInternal();
+    }
+
+    networkManager.broadcastState(serializeState());
+    networkManager.sendActionResult(peerId, true, serializeState());
+  }
+}
+
+function startGameWithState(networkState) {
+  state = deserializeState(networkState);
+
+  // Show game screen
+  lobbyScreen.hidden = true;
+  gameScreen.hidden = false;
+
+  // Set up game UI
+  yourColorIndicator.textContent = `You: ${myColor}`;
+  yourColorIndicator.dataset.color = myColor;
+  roomCodeSmall.textContent = `Room: ${networkManager.roomCode}`;
+
+  createBoard();
+  updateBoardUI();
+  renderInventory();
+  renderScores();
+  renderLog();
+  updateTurnIndicator();
+  checkAutoPass();
+}
 
 function resetState() {
   state = initialState();
@@ -152,46 +607,9 @@ function resetPreviewState() {
   activePreviewAnchor = null;
 }
 
-function initializeGame() {
-  resetState();
-  clearPreview();
-  resetPreviewState();
-  suppressClickUntil = 0;
-  statusBeforePreview = null;
-  // Reset board ghost state
-  removeBoardGhost();
-  ghostAnchor = null;
-  isDraggingGhost = false;
-  ghostPointerId = null;
-  const count = Number(playerCountSelect.value);
-  let activeColors;
-  if (count === 4) {
-    activeColors = COLORS.map((c) => c.name);
-  } else if (count === 3) {
-    const unused = unusedColorSelect.value;
-    activeColors = COLORS.map((c) => c.name).filter((name) => name !== unused);
-  } else {
-    // 2 player variant: Player1 -> Blue & Red, Player2 -> Yellow & Green
-    activeColors = COLORS.map((c) => c.name);
-  }
-  state.activeColors = activeColors;
-  state.turnIndex = 0;
-  state.passChain = 0;
-  state.gameOver = false;
-  state.firstMoveCompleted = Object.fromEntries(activeColors.map((color) => [color, false]));
-  state.usedPieces = Object.fromEntries(activeColors.map((color) => [color, new Set()]));
-  state.selectedPiece = null;
-  state.selectedOrientation = null;
-  state.selectedOrientationIndex = null;
-  state.log = [];
-  createBoard();
-  updateBoardUI();
-  renderInventory();
-  renderScores();
-  renderLog();
-  updateStatus(`Game ready. ${getCurrentColor()} goes first.`);
-  updateTurnIndicator();
-  checkAutoPass();
+function isMyTurn() {
+  if (!isMultiplayer) return true;
+  return getCurrentColor() === myColor;
 }
 
 function getColorConfig(colorName) {
@@ -208,6 +626,14 @@ function renderInventory() {
   inventoryGrid.innerHTML = '';
   if (!currentColor) return;
 
+  // Show whose turn it is
+  const canInteract = isMyTurn() && !state.gameOver;
+
+  // Add visual indicator for non-turn
+  if (isMultiplayer) {
+    inventoryGrid.parentElement.classList.toggle('not-your-turn', !canInteract);
+  }
+
   PIECE_DEFINITIONS.forEach((piece) => {
     const card = document.createElement('button');
     card.className = 'piece-card';
@@ -219,7 +645,7 @@ function renderInventory() {
     const isUsed = state.usedPieces[currentColor]?.has(piece.id);
     card.dataset.owned = (!state.gameOver && !isUsed).toString();
     card.style.color = getColorConfig(currentColor)?.cssVar ?? '#333';
-    card.disabled = state.gameOver || isUsed;
+    card.disabled = state.gameOver || isUsed || !canInteract;
     const nameEl = document.createElement('div');
     nameEl.className = 'piece-name';
     nameEl.textContent = piece.name;
@@ -230,8 +656,9 @@ function renderInventory() {
       card.classList.add('used');
       card.dataset.owned = 'false';
     }
-    // Tap to select piece and spawn ghost on board
-    card.addEventListener('click', () => selectPiece(piece.id));
+    card.addEventListener('click', () => {
+      if (canInteract) selectPiece(piece.id);
+    });
     inventoryGrid.appendChild(card);
   });
   updateSelectedPieceLabel();
@@ -258,7 +685,17 @@ function renderMiniGrid(shape) {
 
 function updateTurnIndicator() {
   const color = getCurrentColor();
-  turnIndicator.textContent = color ?? '—';
+  let text = color ?? '—';
+
+  if (isMultiplayer && color) {
+    if (color === myColor) {
+      text = `${color} (Your Turn)`;
+    } else {
+      text = `${color} (Waiting...)`;
+    }
+  }
+
+  turnIndicator.textContent = text;
 }
 
 function updateSelectedPieceLabel() {
@@ -278,6 +715,10 @@ function updateStatus(message) {
 
 function handleBoardClick(x, y) {
   if (state.gameOver) return;
+  if (!isMyTurn()) {
+    updateStatus("Wait for your turn.");
+    return;
+  }
   const color = getCurrentColor();
   if (!color) return;
   if (!state.selectedPiece) {
@@ -319,6 +760,7 @@ function parseCellCoordinates(cellEl) {
 function handleBoardPointerDown(event) {
   if (event.pointerType === 'mouse') return;
   if (state.gameOver) return;
+  if (!isMyTurn()) return;
   const cell = event.target.closest('.board-cell');
   if (!cell) return;
   if (!state.selectedPiece) {
@@ -334,12 +776,11 @@ function handleBoardPointerDown(event) {
   activePointerId = event.pointerId;
   activePreviewAnchor = coords;
   event.preventDefault();
-  // Capture pointer on boardEl for reliable event handling
   if (typeof boardEl.setPointerCapture === 'function') {
     try {
       boardEl.setPointerCapture(event.pointerId);
     } catch (err) {
-      // noop if capture is not available
+      // noop
     }
   }
   showPlacementPreview(coords.x, coords.y);
@@ -369,25 +810,22 @@ function handleBoardPointerMove(event) {
 function handleBoardPointerUp(event) {
   if (event.pointerType === 'mouse') return;
   if (activePointerId !== event.pointerId) return;
-  // Release pointer capture from boardEl
   if (typeof boardEl.releasePointerCapture === 'function') {
     try {
       boardEl.releasePointerCapture(event.pointerId);
     } catch (err) {
-      // ignore release failures
+      // ignore
     }
   }
   const cell = getCellFromPoint(event.clientX, event.clientY);
   if (cell && state.selectedOrientation) {
     const coords = parseCellCoordinates(cell);
     if (!Number.isNaN(coords.x) && !Number.isNaN(coords.y)) {
-      // Suppress click events for 400ms to prevent double-firing on touch
       suppressClickUntil = Date.now() + 400;
       statusBeforePreview = null;
       clearPreview(false);
       resetPreviewState();
       event.preventDefault();
-      // If ghost exists, move ghost to tapped position instead of placing
       if (boardGhostEl) {
         ghostAnchor = coords;
         updateBoardGhost();
@@ -406,19 +844,16 @@ function handleBoardPointerCancel(event) {
   if (activePointerId !== event.pointerId) return;
   resetPreviewState();
   clearPreview();
-  // Release pointer capture from boardEl
   if (typeof boardEl.releasePointerCapture === 'function') {
     try {
       boardEl.releasePointerCapture(event.pointerId);
     } catch (err) {
-      // ignore release failures
+      // ignore
     }
   }
 }
 
 function handleBoardClickSuppression(event) {
-  // Suppress clicks that occur shortly after a touch placement
-  // This prevents double-firing from touch events synthesizing clicks
   if (Date.now() < suppressClickUntil) {
     event.preventDefault();
     event.stopPropagation();
@@ -427,18 +862,10 @@ function handleBoardClickSuppression(event) {
 }
 
 // --- Board ghost preview system ---
-// When a piece is selected, a draggable ghost appears on the board
-
 function findValidStartingPosition(orientation, corner) {
-  // Try to find an anchor position where:
-  // 1. The piece covers the corner
-  // 2. The piece stays within the board
   for (const [dx, dy] of orientation) {
-    // If we anchor at (corner.x - dx, corner.y - dy), this cell covers the corner
     const anchorX = corner.x - dx;
     const anchorY = corner.y - dy;
-
-    // Check if all cells would be within bounds
     let allInBounds = true;
     for (const [pdx, pdy] of orientation) {
       const cellX = anchorX + pdx;
@@ -448,7 +875,6 @@ function findValidStartingPosition(orientation, corner) {
         break;
       }
     }
-
     if (allInBounds) {
       return { x: anchorX, y: anchorY };
     }
@@ -461,11 +887,8 @@ function getStartingPositionAndOrientation() {
   const colorConfig = getColorConfig(color);
   if (!colorConfig) return { position: { x: 10, y: 10 }, orientationChanged: false };
 
-  // For first move, find a position where piece covers the corner and stays on board
   if (!state.firstMoveCompleted[color]) {
     const corner = colorConfig.corner;
-
-    // First try current orientation
     const currentOrientation = state.selectedOrientation;
     if (currentOrientation) {
       const pos = findValidStartingPosition(currentOrientation, corner);
@@ -474,14 +897,12 @@ function getStartingPositionAndOrientation() {
       }
     }
 
-    // Current orientation doesn't fit - try all orientations to find one that does
     if (state.selectedPiece) {
       const allOrientations = getPieceOrientationsById(state.selectedPiece);
       for (let i = 0; i < allOrientations.length; i++) {
         const orientation = allOrientations[i];
         const pos = findValidStartingPosition(orientation, corner);
         if (pos) {
-          // Found a valid orientation - update state
           state.selectedOrientationIndex = i;
           state.selectedOrientation = orientation;
           updateSelectedPieceLabel();
@@ -489,31 +910,20 @@ function getStartingPositionAndOrientation() {
         }
       }
     }
-
-    // No valid orientation found - fallback to corner (will show as invalid)
     return { position: corner, orientationChanged: false };
   }
-
-  // For subsequent moves, start at center
   return { position: { x: 10, y: 10 }, orientationChanged: false };
 }
 
 function createBoardGhost() {
   if (!state.selectedPiece || !state.selectedOrientation) return;
-
   removeBoardGhost();
-
   const ghost = document.createElement('div');
   ghost.className = 'board-ghost';
   ghost.id = 'board-ghost';
   boardEl.appendChild(ghost);
   boardGhostEl = ghost;
-
-  // Add pointer handlers to the ghost for dragging
   ghost.addEventListener('pointerdown', handleGhostPointerDown);
-
-  // Position at a valid starting location (covers corner, stays on board)
-  // May also auto-rotate piece if current orientation doesn't fit
   const { position } = getStartingPositionAndOrientation();
   ghostAnchor = position;
   updateBoardGhost();
@@ -521,48 +931,31 @@ function createBoardGhost() {
 
 function updateBoardGhost() {
   if (!boardGhostEl || !state.selectedOrientation || !ghostAnchor) return;
-
   const color = getCurrentColor();
   const colorConfig = getColorConfig(color);
   const orientation = state.selectedOrientation;
-
-  // Clear existing cells
   boardGhostEl.innerHTML = '';
-
-  // Calculate placement validity
   const placement = orientation.map(([dx, dy]) => ({ x: ghostAnchor.x + dx, y: ghostAnchor.y + dy }));
   const validity = validatePlacement(color, state.selectedPiece, placement);
-
-  // Get board position for reference
   const boardRect = boardEl.getBoundingClientRect();
 
-  // Create ghost cells at the correct board positions
   orientation.forEach(([dx, dy]) => {
     const cellX = ghostAnchor.x + dx;
     const cellY = ghostAnchor.y + dy;
-
-    // Skip cells outside board
     if (cellX < 0 || cellX >= BOARD_SIZE || cellY < 0 || cellY >= BOARD_SIZE) return;
-
-    // Get the actual board cell at this position to align ghost perfectly
     const targetCell = getBoardCell(cellX, cellY);
     if (!targetCell) return;
-
     const cellRect = targetCell.getBoundingClientRect();
-
     const ghostCell = document.createElement('div');
     ghostCell.className = 'ghost-piece-cell';
     ghostCell.style.width = `${cellRect.width}px`;
     ghostCell.style.height = `${cellRect.height}px`;
-    // Position relative to board container
     ghostCell.style.left = `${cellRect.left - boardRect.left}px`;
     ghostCell.style.top = `${cellRect.top - boardRect.top}px`;
     ghostCell.style.setProperty('--ghost-color', colorConfig?.cssVar ?? '#666');
     ghostCell.dataset.valid = validity.valid ? 'true' : 'false';
     boardGhostEl.appendChild(ghostCell);
   });
-
-  // Update status message based on state
   updateGhostStatusMessage(validity);
 }
 
@@ -592,13 +985,11 @@ function removeBoardGhost() {
 function handleGhostPointerDown(event) {
   if (state.gameOver) return;
   if (!state.selectedPiece) return;
-
+  if (!isMyTurn()) return;
   event.preventDefault();
   event.stopPropagation();
-
   ghostPointerId = event.pointerId;
   isDraggingGhost = true;
-
   if (boardGhostEl) {
     boardGhostEl.setPointerCapture(event.pointerId);
     boardGhostEl.classList.add('dragging');
@@ -607,10 +998,7 @@ function handleGhostPointerDown(event) {
 
 function handleGhostPointerMove(event) {
   if (!isDraggingGhost || ghostPointerId !== event.pointerId) return;
-
   event.preventDefault();
-
-  // Find which cell the pointer is over
   const cell = getCellFromPoint(event.clientX, event.clientY);
   if (cell) {
     const coords = parseCellCoordinates(cell);
@@ -625,18 +1013,13 @@ function handleGhostPointerMove(event) {
 
 function handleGhostPointerUp(event) {
   if (!isDraggingGhost || ghostPointerId !== event.pointerId) return;
-
   event.preventDefault();
-
   if (boardGhostEl) {
     boardGhostEl.releasePointerCapture(event.pointerId);
     boardGhostEl.classList.remove('dragging');
   }
-
   isDraggingGhost = false;
   ghostPointerId = null;
-
-  // Update status message (don't auto-place, require confirmation)
   if (ghostAnchor && state.selectedPiece && state.selectedOrientation) {
     const color = getCurrentColor();
     const placement = state.selectedOrientation.map(([dx, dy]) => ({
@@ -649,11 +1032,14 @@ function handleGhostPointerUp(event) {
 }
 
 function confirmPlacement() {
+  if (!isMyTurn()) {
+    updateStatus("Wait for your turn.");
+    return;
+  }
   if (!ghostAnchor || !state.selectedPiece || !state.selectedOrientation) {
     updateStatus('Select a piece first.');
     return;
   }
-
   const color = getCurrentColor();
   const placement = state.selectedOrientation.map(([dx, dy]) => ({
     x: ghostAnchor.x + dx,
@@ -672,11 +1058,9 @@ function confirmPlacement() {
 
 function handleGhostPointerCancel(event) {
   if (ghostPointerId !== event.pointerId) return;
-
   if (boardGhostEl) {
     boardGhostEl.classList.remove('dragging');
   }
-
   isDraggingGhost = false;
   ghostPointerId = null;
 }
@@ -687,7 +1071,7 @@ function validatePlacement(color, pieceId, cells) {
   let cornerTouch = false;
   for (const { x, y } of cells) {
     if (x < 0 || y < 0 || x >= BOARD_SIZE || y >= BOARD_SIZE) {
-      return { valid: false, reason: 'Placement must stay within the 20×20 board.' };
+      return { valid: false, reason: 'Placement must stay within the 20x20 board.' };
     }
     if (state.board[y][x]) {
       return { valid: false, reason: 'Pieces cannot overlap existing pieces.' };
@@ -732,6 +1116,19 @@ function validatePlacement(color, pieceId, cells) {
 }
 
 function applyPlacement(color, pieceId, cells) {
+  if (isMultiplayer) {
+    // Send action to host
+    networkManager.sendAction({
+      type: 'place',
+      pieceId,
+      cells
+    });
+  } else {
+    applyPlacementInternal(color, pieceId, cells);
+  }
+}
+
+function applyPlacementInternal(color, pieceId, cells) {
   cells.forEach(({ x, y }) => {
     state.board[y][x] = color;
   });
@@ -742,7 +1139,6 @@ function applyPlacement(color, pieceId, cells) {
   renderScores();
   renderLog();
   updateStatus(`${color} placed ${pieceId}.`);
-  // Clean up selection and ghost
   state.selectedPiece = null;
   state.selectedOrientation = null;
   state.selectedOrientationIndex = null;
@@ -750,10 +1146,10 @@ function applyPlacement(color, pieceId, cells) {
   ghostAnchor = null;
   state.passChain = 0;
   renderInventory();
-  advanceTurn();
+  advanceTurnInternal();
 }
 
-function advanceTurn() {
+function advanceTurnInternal() {
   if (state.gameOver) return;
   state.turnIndex = (state.turnIndex + 1) % state.activeColors.length;
   updateTurnIndicator();
@@ -765,9 +1161,17 @@ function checkAutoPass() {
   const color = getCurrentColor();
   if (!color) return;
   if (!hasLegalMove(color)) {
-    updateStatus(`${color} has no legal moves. Passing is required.`);
+    if (isMyTurn()) {
+      updateStatus(`No legal moves available. You must pass.`);
+    } else {
+      updateStatus(`${color} has no legal moves. Waiting for pass.`);
+    }
   } else {
-    updateStatus(`${color}'s turn. Select a piece.`);
+    if (isMyTurn()) {
+      updateStatus(`Your turn! Select a piece.`);
+    } else {
+      updateStatus(`Waiting for ${color} to play...`);
+    }
   }
 }
 
@@ -775,6 +1179,10 @@ function selectPiece(pieceId) {
   const color = getCurrentColor();
   if (!color) return;
   if (state.gameOver) return;
+  if (!isMyTurn()) {
+    updateStatus("Wait for your turn.");
+    return;
+  }
   if (state.usedPieces[color].has(pieceId)) {
     updateStatus('Piece already used.');
     return;
@@ -784,15 +1192,14 @@ function selectPiece(pieceId) {
   state.selectedOrientationIndex = 0;
   state.selectedOrientation = orientations[state.selectedOrientationIndex];
   updateSelectedPieceLabel();
-  // Update visual selection on piece cards
   inventoryGrid.querySelectorAll('.piece-card').forEach(card => {
     card.classList.toggle('selected', card.dataset.pieceId === pieceId);
   });
-  // Spawn draggable ghost on the board
   createBoardGhost();
 }
 
 function rotateSelectedPiece(direction) {
+  if (!isMyTurn()) return;
   if (!state.selectedPiece) {
     updateStatus('Select a piece before rotating.');
     return;
@@ -807,20 +1214,19 @@ function rotateSelectedPiece(direction) {
   }
   state.selectedOrientation = orientations[state.selectedOrientationIndex];
   updateSelectedPieceLabel();
-  // Update board ghost if present
   if (boardGhostEl) {
     updateBoardGhost();
   }
 }
 
 function flipSelectedPiece() {
+  if (!isMyTurn()) return;
   if (!state.selectedPiece) {
     updateStatus('Select a piece before flipping.');
     return;
   }
   const orientations = getPieceOrientationsById(state.selectedPiece);
   if (!orientations.length) return;
-  // Flip by moving halfway across orientation list: find mirrored orientation by matching reversed coordinates
   const current = state.selectedOrientation;
   const targetKey = JSON.stringify(normalizeShape(current.map(([x, y]) => [-x, y])));
   const index = orientations.findIndex((orient) => JSON.stringify(orient) === targetKey);
@@ -832,7 +1238,6 @@ function flipSelectedPiece() {
     state.selectedOrientation = orientations[state.selectedOrientationIndex];
   }
   updateSelectedPieceLabel();
-  // Update board ghost if present
   if (boardGhostEl) {
     updateBoardGhost();
   }
@@ -840,24 +1245,33 @@ function flipSelectedPiece() {
 
 function handlePass() {
   if (state.gameOver) return;
+  if (!isMyTurn()) {
+    updateStatus("Wait for your turn.");
+    return;
+  }
   const color = getCurrentColor();
   if (!color) return;
   if (hasLegalMove(color)) {
     updateStatus('Passing is illegal while a legal move exists.');
     return;
   }
-  state.selectedPiece = null;
-  state.selectedOrientation = null;
-  state.selectedOrientationIndex = null;
-  updateSelectedPieceLabel();
-  state.log.push(`${color} passed.`);
-  state.passChain += 1;
-  updateStatus(`${color} passes.`);
-  renderLog();
-  if (state.passChain >= state.activeColors.length) {
-    endGame();
+
+  if (isMultiplayer) {
+    networkManager.sendAction({ type: 'pass' });
   } else {
-    advanceTurn();
+    state.selectedPiece = null;
+    state.selectedOrientation = null;
+    state.selectedOrientationIndex = null;
+    updateSelectedPieceLabel();
+    state.log.push(`${color} passed.`);
+    state.passChain += 1;
+    updateStatus(`${color} passes.`);
+    renderLog();
+    if (state.passChain >= state.activeColors.length) {
+      endGame();
+    } else {
+      advanceTurnInternal();
+    }
   }
 }
 
@@ -911,7 +1325,7 @@ function computeScores() {
 function renderScores() {
   scoreRows.innerHTML = '';
   if (!state.activeColors.length) return;
-  const scores = state.activeColors.map((color) => {
+  state.activeColors.forEach((color) => {
     const unusedPieces = PIECE_DEFINITIONS.filter((piece) => !state.usedPieces[color].has(piece.id));
     const remainingSquares = unusedPieces.reduce((sum, piece) => sum + piece.squares.length, 0);
     let bonus = 0;
@@ -928,6 +1342,9 @@ function renderScores() {
     const row = document.createElement('tr');
     const colorCell = document.createElement('td');
     colorCell.textContent = color;
+    if (isMultiplayer && color === myColor) {
+      colorCell.innerHTML = `${color} <span style="font-size:0.75rem;color:var(--muted)">(You)</span>`;
+    }
     const remainingCell = document.createElement('td');
     remainingCell.textContent = remainingSquares.toString();
     const bonusCell = document.createElement('td');
@@ -936,9 +1353,7 @@ function renderScores() {
     totalCell.textContent = total.toString();
     row.append(colorCell, remainingCell, bonusCell, totalCell);
     scoreRows.appendChild(row);
-    return { color, remainingSquares, bonus, total };
   });
-  return scores;
 }
 
 function renderLog() {
@@ -961,8 +1376,10 @@ function endGame() {
     updateStatus(`Game over! Tie between ${winners.join(', ')} at ${topScore.total} points.`);
   }
   renderScores();
+  renderInventory();
 }
 
+// ========== Event Listeners ==========
 rotateLeftBtn.addEventListener('click', () => rotateSelectedPiece('left'));
 rotateRightBtn.addEventListener('click', () => rotateSelectedPiece('right'));
 flipBtn.addEventListener('click', () => flipSelectedPiece());
@@ -975,15 +1392,9 @@ boardEl.addEventListener('pointerup', handleBoardPointerUp);
 boardEl.addEventListener('pointercancel', handleBoardPointerCancel);
 boardEl.addEventListener('click', handleBoardClickSuppression, true);
 
-// Global listeners for ghost dragging (ghost captures pointer, but we need move/up on document)
 document.addEventListener('pointermove', handleGhostPointerMove);
 document.addEventListener('pointerup', handleGhostPointerUp);
 document.addEventListener('pointercancel', handleGhostPointerCancel);
 
-startButton.addEventListener('click', initializeGame);
-playerCountSelect.addEventListener('change', () => {
-  const count = Number(playerCountSelect.value);
-  unusedColorRow.hidden = count !== 3;
-});
-
-initializeGame();
+// Initialize with lobby visible
+showLobbySection('lobby-menu');
