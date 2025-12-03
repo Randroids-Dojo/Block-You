@@ -47,6 +47,11 @@ let activePreviewAnchor = null;
 let suppressClickUntil = 0;
 let statusBeforePreview = null;
 
+// Inventory drag state
+let isDraggingFromInventory = false;
+let inventoryDragPointerId = null;
+let dragGhostEl = null;
+
 function resetState() {
   state = initialState();
 }
@@ -146,12 +151,15 @@ function resetPreviewState() {
 }
 
 function initializeGame() {
-  console.log('initializeGame called');
   resetState();
   clearPreview();
   resetPreviewState();
   suppressClickUntil = 0;
   statusBeforePreview = null;
+  // Reset inventory drag state
+  removeDragGhost();
+  isDraggingFromInventory = false;
+  inventoryDragPointerId = null;
   const count = Number(playerCountSelect.value);
   let activeColors;
   if (count === 4) {
@@ -200,6 +208,9 @@ function renderInventory() {
   PIECE_DEFINITIONS.forEach((piece) => {
     const card = document.createElement('button');
     card.className = 'piece-card';
+    if (state.selectedPiece === piece.id) {
+      card.classList.add('selected');
+    }
     card.type = 'button';
     card.dataset.pieceId = piece.id;
     const isUsed = state.usedPieces[currentColor]?.has(piece.id);
@@ -216,7 +227,14 @@ function renderInventory() {
       card.classList.add('used');
       card.dataset.owned = 'false';
     }
-    card.addEventListener('click', () => selectPiece(piece.id));
+    // Click to select
+    card.addEventListener('click', (e) => {
+      if (!isDraggingFromInventory) {
+        selectPiece(piece.id);
+      }
+    });
+    // Long press / drag to place directly
+    card.addEventListener('pointerdown', (e) => handleInventoryPointerDown(e, piece.id));
     inventoryGrid.appendChild(card);
   });
   updateSelectedPieceLabel();
@@ -262,7 +280,6 @@ function updateStatus(message) {
 }
 
 function handleBoardClick(x, y) {
-  console.log('handleBoardClick called:', x, y);
   if (state.gameOver) return;
   const color = getCurrentColor();
   if (!color) return;
@@ -400,6 +417,147 @@ function handleBoardClickSuppression(event) {
   }
 }
 
+// --- Inventory drag-to-place handlers ---
+
+function createDragGhost(pieceId) {
+  const piece = PIECE_DEFINITIONS.find(p => p.id === pieceId);
+  if (!piece) return null;
+
+  const color = getCurrentColor();
+  const colorConfig = getColorConfig(color);
+  const orientation = state.selectedOrientation || getPieceOrientationsById(pieceId)[0];
+
+  // Calculate grid bounds
+  const minX = Math.min(...orientation.map(([x]) => x));
+  const maxX = Math.max(...orientation.map(([x]) => x));
+  const minY = Math.min(...orientation.map(([, y]) => y));
+  const maxY = Math.max(...orientation.map(([, y]) => y));
+  const cols = maxX - minX + 1;
+  const rows = maxY - minY + 1;
+
+  const ghost = document.createElement('div');
+  ghost.className = 'drag-ghost';
+  ghost.style.gridTemplateColumns = `repeat(${cols}, 20px)`;
+  ghost.style.gridTemplateRows = `repeat(${rows}, 20px)`;
+
+  // Create grid cells
+  const filled = new Set(orientation.map(([x, y]) => `${x - minX},${y - minY}`));
+  for (let y = 0; y < rows; y++) {
+    for (let x = 0; x < cols; x++) {
+      const cell = document.createElement('div');
+      cell.className = 'ghost-cell';
+      if (filled.has(`${x},${y}`)) {
+        cell.style.background = colorConfig?.cssVar ?? '#666';
+      } else {
+        cell.style.background = 'transparent';
+      }
+      ghost.appendChild(cell);
+    }
+  }
+
+  document.body.appendChild(ghost);
+  return ghost;
+}
+
+function updateDragGhostPosition(x, y) {
+  if (dragGhostEl) {
+    dragGhostEl.style.left = `${x}px`;
+    dragGhostEl.style.top = `${y}px`;
+  }
+}
+
+function removeDragGhost() {
+  if (dragGhostEl) {
+    dragGhostEl.remove();
+    dragGhostEl = null;
+  }
+}
+
+function handleInventoryPointerDown(event, pieceId) {
+  if (state.gameOver) return;
+  const color = getCurrentColor();
+  if (!color) return;
+  if (state.usedPieces[color]?.has(pieceId)) return;
+
+  // Select the piece
+  selectPiece(pieceId);
+
+  // Start drag tracking
+  inventoryDragPointerId = event.pointerId;
+  isDraggingFromInventory = false; // Will become true on move
+
+  // Capture pointer for drag tracking
+  event.target.setPointerCapture(event.pointerId);
+}
+
+function handleInventoryPointerMove(event) {
+  if (inventoryDragPointerId !== event.pointerId) return;
+  if (!state.selectedPiece) return;
+
+  // Start dragging after some movement
+  if (!isDraggingFromInventory) {
+    isDraggingFromInventory = true;
+    dragGhostEl = createDragGhost(state.selectedPiece);
+  }
+
+  // Update ghost position
+  updateDragGhostPosition(event.clientX, event.clientY);
+
+  // Check if over board and show preview
+  const cell = getCellFromPoint(event.clientX, event.clientY);
+  if (cell) {
+    const coords = parseCellCoordinates(cell);
+    if (!Number.isNaN(coords.x) && !Number.isNaN(coords.y)) {
+      if (!activePreviewAnchor || activePreviewAnchor.x !== coords.x || activePreviewAnchor.y !== coords.y) {
+        activePreviewAnchor = coords;
+        showPlacementPreview(coords.x, coords.y);
+      }
+    }
+  } else {
+    clearPreview(false);
+    activePreviewAnchor = null;
+  }
+}
+
+function handleInventoryPointerUp(event) {
+  if (inventoryDragPointerId !== event.pointerId) return;
+
+  const wasDragging = isDraggingFromInventory;
+
+  // Clean up drag state
+  removeDragGhost();
+  inventoryDragPointerId = null;
+  isDraggingFromInventory = false;
+
+  if (wasDragging && state.selectedPiece) {
+    // Check if released over board
+    const cell = getCellFromPoint(event.clientX, event.clientY);
+    if (cell) {
+      const coords = parseCellCoordinates(cell);
+      if (!Number.isNaN(coords.x) && !Number.isNaN(coords.y)) {
+        clearPreview(false);
+        activePreviewAnchor = null;
+        handleBoardClick(coords.x, coords.y);
+        suppressClickUntil = Date.now() + 400;
+        return;
+      }
+    }
+  }
+
+  clearPreview();
+  activePreviewAnchor = null;
+}
+
+function handleInventoryPointerCancel(event) {
+  if (inventoryDragPointerId !== event.pointerId) return;
+
+  removeDragGhost();
+  inventoryDragPointerId = null;
+  isDraggingFromInventory = false;
+  clearPreview();
+  activePreviewAnchor = null;
+}
+
 function validatePlacement(color, pieceId, cells) {
   const colorConfig = getColorConfig(color);
   const firstMove = !state.firstMoveCompleted[color];
@@ -488,16 +646,9 @@ function checkAutoPass() {
 }
 
 function selectPiece(pieceId) {
-  console.log('selectPiece called:', pieceId);
   const color = getCurrentColor();
-  if (!color) {
-    console.log('No current color');
-    return;
-  }
-  if (state.gameOver) {
-    console.log('Game is over');
-    return;
-  }
+  if (!color) return;
+  if (state.gameOver) return;
   if (state.usedPieces[color].has(pieceId)) {
     updateStatus('Piece already used.');
     return;
@@ -507,8 +658,11 @@ function selectPiece(pieceId) {
   state.selectedOrientationIndex = 0;
   state.selectedOrientation = orientations[state.selectedOrientationIndex];
   updateSelectedPieceLabel();
-  updateStatus(`Selected ${pieceId}. Tap a board cell to place.`);
-  console.log('Piece selected successfully:', pieceId);
+  updateStatus(`Selected ${pieceId}. Drag to board or tap a cell to place.`);
+  // Update visual selection on piece cards
+  inventoryGrid.querySelectorAll('.piece-card').forEach(card => {
+    card.classList.toggle('selected', card.dataset.pieceId === pieceId);
+  });
 }
 
 function rotateSelectedPiece(direction) {
@@ -690,6 +844,11 @@ boardEl.addEventListener('pointermove', handleBoardPointerMove);
 boardEl.addEventListener('pointerup', handleBoardPointerUp);
 boardEl.addEventListener('pointercancel', handleBoardPointerCancel);
 boardEl.addEventListener('click', handleBoardClickSuppression, true);
+
+// Global listeners for inventory drag (need to track across entire document)
+document.addEventListener('pointermove', handleInventoryPointerMove);
+document.addEventListener('pointerup', handleInventoryPointerUp);
+document.addEventListener('pointercancel', handleInventoryPointerCancel);
 
 startButton.addEventListener('click', initializeGame);
 playerCountSelect.addEventListener('change', () => {

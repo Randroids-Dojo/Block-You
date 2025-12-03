@@ -235,9 +235,33 @@ button:not(:disabled):active {
   transform: scale(0.97);
 }
 
+.piece-card.selected {
+  outline: 3px solid currentColor;
+  outline-offset: 2px;
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.15), rgba(0, 0, 0, 0.05));
+  box-shadow: 0 0 12px currentColor;
+}
+
 .piece-card[data-owned="false"] {
   opacity: 0.4;
   pointer-events: none;
+}
+
+/* Drag ghost that follows finger during drag */
+.drag-ghost {
+  position: fixed;
+  pointer-events: none;
+  z-index: 1000;
+  opacity: 0.8;
+  transform: translate(-50%, -50%);
+  display: grid;
+  gap: 2px;
+}
+
+.drag-ghost .ghost-cell {
+  width: 20px;
+  height: 20px;
+  border-radius: 3px;
 }
 
 .piece-name {
