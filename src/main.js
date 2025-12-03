@@ -289,6 +289,12 @@ function handleBoardClick(x, y) {
     updateStatus('Orientation not ready. Please reselect the piece.');
     return;
   }
+  // If ghost exists, move ghost to clicked position instead of placing
+  if (boardGhostEl) {
+    ghostAnchor = { x, y };
+    updateBoardGhost();
+    return;
+  }
   const placement = orientation.map(([dx, dy]) => ({ x: x + dx, y: y + dy }));
   const validity = validatePlacement(color, state.selectedPiece, placement);
   if (!validity.valid) {
@@ -381,6 +387,12 @@ function handleBoardPointerUp(event) {
       clearPreview(false);
       resetPreviewState();
       event.preventDefault();
+      // If ghost exists, move ghost to tapped position instead of placing
+      if (boardGhostEl) {
+        ghostAnchor = coords;
+        updateBoardGhost();
+        return;
+      }
       handleBoardClick(coords.x, coords.y);
       return;
     }
@@ -563,9 +575,9 @@ function updateGhostStatusMessage(validity) {
     }
   } else {
     if (validity.valid) {
-      updateStatus('Drag to reposition, or tap Confirm to place.');
+      updateStatus('Tap cell or drag to reposition. Tap Confirm to place.');
     } else {
-      updateStatus(`${validity.reason} Drag to a valid position.`);
+      updateStatus(`${validity.reason} Tap or drag to a valid position.`);
     }
   }
 }
