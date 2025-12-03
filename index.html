@@ -7,31 +7,103 @@
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
+    <!-- Lobby/Menu Screen -->
+    <div id="lobby-screen" class="lobby-screen">
+      <div class="lobby-container">
+        <header class="lobby-header">
+          <h1>Block-You</h1>
+          <p class="tagline">Mobile-friendly Blokus-inspired strategy game</p>
+        </header>
+
+        <div id="lobby-menu" class="lobby-menu">
+          <button id="new-game-btn" class="lobby-btn primary">New Game</button>
+          <button id="join-game-btn" class="lobby-btn secondary">Join Game</button>
+        </div>
+
+        <!-- New Game Setup -->
+        <div id="new-game-setup" class="lobby-section" hidden>
+          <h2>Create New Game</h2>
+          <div class="lobby-form">
+            <div class="control-row">
+              <label for="player-count">Number of Players</label>
+              <select id="player-count">
+                <option value="4">4 Players</option>
+                <option value="3">3 Players</option>
+                <option value="2">2 Players</option>
+              </select>
+            </div>
+          </div>
+          <button id="create-game-btn" class="lobby-btn primary">Create Game</button>
+          <button id="back-from-new" class="lobby-btn secondary">Back</button>
+        </div>
+
+        <!-- Host Waiting Room -->
+        <div id="host-waiting" class="lobby-section" hidden>
+          <h2>Waiting for Players</h2>
+          <div class="room-code-display">
+            <p>Share this code with other players:</p>
+            <div class="room-code" id="room-code-display">------</div>
+            <button id="copy-code-btn" class="lobby-btn secondary small">Copy Code</button>
+          </div>
+          <div class="players-list">
+            <h3>Connected Players</h3>
+            <ul id="players-list"></ul>
+          </div>
+          <p class="waiting-text" id="waiting-text">Waiting for more players...</p>
+          <button id="start-multiplayer-btn" class="lobby-btn primary" disabled>Start Game</button>
+          <button id="cancel-host-btn" class="lobby-btn secondary">Cancel</button>
+        </div>
+
+        <!-- Join Game -->
+        <div id="join-game-setup" class="lobby-section" hidden>
+          <h2>Join Game</h2>
+          <div class="lobby-form">
+            <label for="room-code-input">Enter Room Code</label>
+            <input type="text" id="room-code-input" class="room-code-input" placeholder="XXXXXX" maxlength="6" autocomplete="off" autocapitalize="characters">
+          </div>
+          <button id="join-btn" class="lobby-btn primary">Join</button>
+          <button id="back-from-join" class="lobby-btn secondary">Back</button>
+        </div>
+
+        <!-- Client Waiting Room -->
+        <div id="client-waiting" class="lobby-section" hidden>
+          <h2>Connected!</h2>
+          <div class="your-color-display">
+            <p>You are playing as:</p>
+            <div class="color-badge" id="your-color-badge">--</div>
+          </div>
+          <div class="players-list">
+            <h3>Players in Room</h3>
+            <ul id="client-players-list"></ul>
+          </div>
+          <p class="waiting-text">Waiting for host to start the game...</p>
+          <button id="leave-game-btn" class="lobby-btn secondary">Leave Game</button>
+        </div>
+
+        <!-- Connection Status -->
+        <div id="connection-status" class="connection-status" hidden>
+          <div class="spinner"></div>
+          <p id="connection-message">Connecting...</p>
+        </div>
+
+        <!-- Error Display -->
+        <div id="lobby-error" class="lobby-error" hidden>
+          <p id="error-message"></p>
+          <button id="error-dismiss-btn" class="lobby-btn secondary">OK</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Game Screen (hidden until game starts) -->
+    <div id="game-screen" class="game-screen" hidden>
     <header class="app-header">
       <h1>Block-You</h1>
-      <p class="tagline">Mobile-friendly Blokus-inspired strategy game</p>
+      <div class="game-header-info">
+        <span id="your-color-indicator" class="your-color-indicator"></span>
+        <span id="room-code-small" class="room-code-small"></span>
+      </div>
     </header>
     <main class="app-main">
-      <section class="controls" aria-label="Game setup">
-        <div class="control-row">
-          <label for="player-count">Players</label>
-          <select id="player-count">
-            <option value="4">4 Players</option>
-            <option value="3">3 Players</option>
-            <option value="2">2 Players</option>
-          </select>
-        </div>
-        <div class="control-row" id="unused-color-row" hidden>
-          <label for="unused-color">Unused Color</label>
-          <select id="unused-color">
-            <option value="Blue">Blue</option>
-            <option value="Yellow" selected>Yellow</option>
-            <option value="Red">Red</option>
-            <option value="Green">Green</option>
-          </select>
-        </div>
-        <button id="start-button" class="primary">Start / Reset Game</button>
-      </section>
       <section class="status-panel" aria-live="polite">
         <div class="status-line">
           <strong>Turn:</strong>
@@ -81,7 +153,9 @@
     </main>
     <footer class="app-footer">
       <p>Rule complete implementation per official Blokus corner and edge rules.</p>
+      <button id="leave-game-footer-btn" class="leave-game-btn">Leave Game</button>
     </footer>
+    </div> <!-- End game-screen -->
     <script>
       window.va = window.va || function () {
         (window.vaq = window.vaq || []).push(arguments);
