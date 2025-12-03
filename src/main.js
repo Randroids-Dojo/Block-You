@@ -417,53 +417,73 @@ function handleBoardClickSuppression(event) {
 // --- Board ghost preview system ---
 // When a piece is selected, a draggable ghost appears on the board
 
-function getStartingPosition() {
+function findValidStartingPosition(orientation, corner) {
+  // Try to find an anchor position where:
+  // 1. The piece covers the corner
+  // 2. The piece stays within the board
+  for (const [dx, dy] of orientation) {
+    // If we anchor at (corner.x - dx, corner.y - dy), this cell covers the corner
+    const anchorX = corner.x - dx;
+    const anchorY = corner.y - dy;
+
+    // Check if all cells would be within bounds
+    let allInBounds = true;
+    for (const [pdx, pdy] of orientation) {
+      const cellX = anchorX + pdx;
+      const cellY = anchorY + pdy;
+      if (cellX < 0 || cellX >= BOARD_SIZE || cellY < 0 || cellY >= BOARD_SIZE) {
+        allInBounds = false;
+        break;
+      }
+    }
+
+    if (allInBounds) {
+      return { x: anchorX, y: anchorY };
+    }
+  }
+  return null;
+}
+
+function getStartingPositionAndOrientation() {
   const color = getCurrentColor();
   const colorConfig = getColorConfig(color);
-  if (!colorConfig) return { x: 10, y: 10 }; // Center fallback
+  if (!colorConfig) return { position: { x: 10, y: 10 }, orientationChanged: false };
 
   // For first move, find a position where piece covers the corner and stays on board
   if (!state.firstMoveCompleted[color]) {
     const corner = colorConfig.corner;
-    const orientation = state.selectedOrientation;
-    if (!orientation) return corner;
 
-    // Find piece bounds
-    const minX = Math.min(...orientation.map(([x]) => x));
-    const maxX = Math.max(...orientation.map(([x]) => x));
-    const minY = Math.min(...orientation.map(([, y]) => y));
-    const maxY = Math.max(...orientation.map(([, y]) => y));
-
-    // Try to find an anchor position where:
-    // 1. The piece covers the corner
-    // 2. The piece stays within the board
-    for (const [dx, dy] of orientation) {
-      // If we anchor at (corner.x - dx, corner.y - dy), this cell covers the corner
-      const anchorX = corner.x - dx;
-      const anchorY = corner.y - dy;
-
-      // Check if all cells would be within bounds
-      let allInBounds = true;
-      for (const [pdx, pdy] of orientation) {
-        const cellX = anchorX + pdx;
-        const cellY = anchorY + pdy;
-        if (cellX < 0 || cellX >= BOARD_SIZE || cellY < 0 || cellY >= BOARD_SIZE) {
-          allInBounds = false;
-          break;
-        }
-      }
-
-      if (allInBounds) {
-        return { x: anchorX, y: anchorY };
+    // First try current orientation
+    const currentOrientation = state.selectedOrientation;
+    if (currentOrientation) {
+      const pos = findValidStartingPosition(currentOrientation, corner);
+      if (pos) {
+        return { position: pos, orientationChanged: false };
       }
     }
 
-    // Fallback: just use corner (may be partially off-board)
-    return corner;
+    // Current orientation doesn't fit - try all orientations to find one that does
+    if (state.selectedPiece) {
+      const allOrientations = getPieceOrientationsById(state.selectedPiece);
+      for (let i = 0; i < allOrientations.length; i++) {
+        const orientation = allOrientations[i];
+        const pos = findValidStartingPosition(orientation, corner);
+        if (pos) {
+          // Found a valid orientation - update state
+          state.selectedOrientationIndex = i;
+          state.selectedOrientation = orientation;
+          updateSelectedPieceLabel();
+          return { position: pos, orientationChanged: true };
+        }
+      }
+    }
+
+    // No valid orientation found - fallback to corner (will show as invalid)
+    return { position: corner, orientationChanged: false };
   }
 
   // For subsequent moves, start at center
-  return { x: 10, y: 10 };
+  return { position: { x: 10, y: 10 }, orientationChanged: false };
 }
 
 function createBoardGhost() {
@@ -481,8 +501,9 @@ function createBoardGhost() {
   ghost.addEventListener('pointerdown', handleGhostPointerDown);
 
   // Position at a valid starting location (covers corner, stays on board)
-  const startPos = getStartingPosition();
-  ghostAnchor = startPos;
+  // May also auto-rotate piece if current orientation doesn't fit
+  const { position } = getStartingPositionAndOrientation();
+  ghostAnchor = position;
   updateBoardGhost();
 }
 
