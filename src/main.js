@@ -47,10 +47,11 @@ let activePreviewAnchor = null;
 let suppressClickUntil = 0;
 let statusBeforePreview = null;
 
-// Inventory drag state
-let isDraggingFromInventory = false;
-let inventoryDragPointerId = null;
-let dragGhostEl = null;
+// Board ghost preview state
+let boardGhostEl = null;
+let ghostAnchor = null; // Current position of ghost on board
+let isDraggingGhost = false;
+let ghostPointerId = null;
 
 function resetState() {
   state = initialState();
@@ -156,10 +157,11 @@ function initializeGame() {
   resetPreviewState();
   suppressClickUntil = 0;
   statusBeforePreview = null;
-  // Reset inventory drag state
-  removeDragGhost();
-  isDraggingFromInventory = false;
-  inventoryDragPointerId = null;
+  // Reset board ghost state
+  removeBoardGhost();
+  ghostAnchor = null;
+  isDraggingGhost = false;
+  ghostPointerId = null;
   const count = Number(playerCountSelect.value);
   let activeColors;
   if (count === 4) {
@@ -227,14 +229,8 @@ function renderInventory() {
       card.classList.add('used');
       card.dataset.owned = 'false';
     }
-    // Click to select
-    card.addEventListener('click', (e) => {
-      if (!isDraggingFromInventory) {
-        selectPiece(piece.id);
-      }
-    });
-    // Long press / drag to place directly
-    card.addEventListener('pointerdown', (e) => handleInventoryPointerDown(e, piece.id));
+    // Tap to select piece and spawn ghost on board
+    card.addEventListener('click', () => selectPiece(piece.id));
     inventoryGrid.appendChild(card);
   });
   updateSelectedPieceLabel();
@@ -417,145 +413,171 @@ function handleBoardClickSuppression(event) {
   }
 }
 
-// --- Inventory drag-to-place handlers ---
+// --- Board ghost preview system ---
+// When a piece is selected, a draggable ghost appears on the board
 
-function createDragGhost(pieceId) {
-  const piece = PIECE_DEFINITIONS.find(p => p.id === pieceId);
-  if (!piece) return null;
+function getStartingCorner() {
+  const color = getCurrentColor();
+  const colorConfig = getColorConfig(color);
+  if (!colorConfig) return { x: 10, y: 10 }; // Center fallback
+
+  // For first move, start at the player's corner
+  if (!state.firstMoveCompleted[color]) {
+    return { x: colorConfig.corner.x, y: colorConfig.corner.y };
+  }
+  // Otherwise start at center of board
+  return { x: 10, y: 10 };
+}
+
+function createBoardGhost() {
+  if (!state.selectedPiece || !state.selectedOrientation) return;
+
+  removeBoardGhost();
+
+  const ghost = document.createElement('div');
+  ghost.className = 'board-ghost';
+  ghost.id = 'board-ghost';
+  boardEl.appendChild(ghost);
+  boardGhostEl = ghost;
+
+  // Add pointer handlers to the ghost for dragging
+  ghost.addEventListener('pointerdown', handleGhostPointerDown);
+
+  // Position at starting location
+  const startPos = getStartingCorner();
+  ghostAnchor = startPos;
+  updateBoardGhost();
+}
+
+function updateBoardGhost() {
+  if (!boardGhostEl || !state.selectedOrientation || !ghostAnchor) return;
 
   const color = getCurrentColor();
   const colorConfig = getColorConfig(color);
-  const orientation = state.selectedOrientation || getPieceOrientationsById(pieceId)[0];
+  const orientation = state.selectedOrientation;
 
-  // Calculate grid bounds
-  const minX = Math.min(...orientation.map(([x]) => x));
-  const maxX = Math.max(...orientation.map(([x]) => x));
-  const minY = Math.min(...orientation.map(([, y]) => y));
-  const maxY = Math.max(...orientation.map(([, y]) => y));
-  const cols = maxX - minX + 1;
-  const rows = maxY - minY + 1;
+  // Clear existing cells
+  boardGhostEl.innerHTML = '';
 
-  const ghost = document.createElement('div');
-  ghost.className = 'drag-ghost';
-  ghost.style.gridTemplateColumns = `repeat(${cols}, 20px)`;
-  ghost.style.gridTemplateRows = `repeat(${rows}, 20px)`;
+  // Calculate placement validity
+  const placement = orientation.map(([dx, dy]) => ({ x: ghostAnchor.x + dx, y: ghostAnchor.y + dy }));
+  const validity = validatePlacement(color, state.selectedPiece, placement);
 
-  // Create grid cells
-  const filled = new Set(orientation.map(([x, y]) => `${x - minX},${y - minY}`));
-  for (let y = 0; y < rows; y++) {
-    for (let x = 0; x < cols; x++) {
-      const cell = document.createElement('div');
-      cell.className = 'ghost-cell';
-      if (filled.has(`${x},${y}`)) {
-        cell.style.background = colorConfig?.cssVar ?? '#666';
-      } else {
-        cell.style.background = 'transparent';
-      }
-      ghost.appendChild(cell);
-    }
-  }
+  // Get board cell size for positioning
+  const firstCell = boardEl.querySelector('.board-cell');
+  if (!firstCell) return;
+  const cellRect = firstCell.getBoundingClientRect();
+  const boardRect = boardEl.getBoundingClientRect();
+  const cellSize = cellRect.width;
+  const gap = 2; // CSS gap
 
-  document.body.appendChild(ghost);
-  return ghost;
-}
+  // Create ghost cells at the correct board positions
+  orientation.forEach(([dx, dy]) => {
+    const cellX = ghostAnchor.x + dx;
+    const cellY = ghostAnchor.y + dy;
 
-function updateDragGhostPosition(x, y) {
-  if (dragGhostEl) {
-    dragGhostEl.style.left = `${x}px`;
-    dragGhostEl.style.top = `${y}px`;
-  }
-}
+    // Skip cells outside board
+    if (cellX < 0 || cellX >= BOARD_SIZE || cellY < 0 || cellY >= BOARD_SIZE) return;
 
-function removeDragGhost() {
-  if (dragGhostEl) {
-    dragGhostEl.remove();
-    dragGhostEl = null;
+    const ghostCell = document.createElement('div');
+    ghostCell.className = 'ghost-piece-cell';
+    ghostCell.style.width = `${cellSize}px`;
+    ghostCell.style.height = `${cellSize}px`;
+    ghostCell.style.left = `${cellX * (cellSize + gap)}px`;
+    ghostCell.style.top = `${cellY * (cellSize + gap)}px`;
+    ghostCell.style.background = colorConfig?.cssVar ?? '#666';
+    ghostCell.dataset.valid = validity.valid ? 'true' : 'false';
+    boardGhostEl.appendChild(ghostCell);
+  });
+
+  // Update status message
+  if (validity.valid) {
+    updateStatus('Release to place, or drag to reposition.');
+  } else {
+    updateStatus(validity.reason);
   }
 }
 
-function handleInventoryPointerDown(event, pieceId) {
+function removeBoardGhost() {
+  if (boardGhostEl) {
+    boardGhostEl.remove();
+    boardGhostEl = null;
+  }
+}
+
+function handleGhostPointerDown(event) {
   if (state.gameOver) return;
-  const color = getCurrentColor();
-  if (!color) return;
-  if (state.usedPieces[color]?.has(pieceId)) return;
-
-  // Select the piece
-  selectPiece(pieceId);
-
-  // Start drag tracking
-  inventoryDragPointerId = event.pointerId;
-  isDraggingFromInventory = false; // Will become true on move
-
-  // Capture pointer for drag tracking
-  event.target.setPointerCapture(event.pointerId);
-}
-
-function handleInventoryPointerMove(event) {
-  if (inventoryDragPointerId !== event.pointerId) return;
   if (!state.selectedPiece) return;
 
-  // Start dragging after some movement
-  if (!isDraggingFromInventory) {
-    isDraggingFromInventory = true;
-    dragGhostEl = createDragGhost(state.selectedPiece);
+  event.preventDefault();
+  event.stopPropagation();
+
+  ghostPointerId = event.pointerId;
+  isDraggingGhost = true;
+
+  if (boardGhostEl) {
+    boardGhostEl.setPointerCapture(event.pointerId);
+    boardGhostEl.classList.add('dragging');
   }
+}
 
-  // Update ghost position
-  updateDragGhostPosition(event.clientX, event.clientY);
+function handleGhostPointerMove(event) {
+  if (!isDraggingGhost || ghostPointerId !== event.pointerId) return;
 
-  // Check if over board and show preview
+  event.preventDefault();
+
+  // Find which cell the pointer is over
   const cell = getCellFromPoint(event.clientX, event.clientY);
   if (cell) {
     const coords = parseCellCoordinates(cell);
     if (!Number.isNaN(coords.x) && !Number.isNaN(coords.y)) {
-      if (!activePreviewAnchor || activePreviewAnchor.x !== coords.x || activePreviewAnchor.y !== coords.y) {
-        activePreviewAnchor = coords;
-        showPlacementPreview(coords.x, coords.y);
-      }
-    }
-  } else {
-    clearPreview(false);
-    activePreviewAnchor = null;
-  }
-}
-
-function handleInventoryPointerUp(event) {
-  if (inventoryDragPointerId !== event.pointerId) return;
-
-  const wasDragging = isDraggingFromInventory;
-
-  // Clean up drag state
-  removeDragGhost();
-  inventoryDragPointerId = null;
-  isDraggingFromInventory = false;
-
-  if (wasDragging && state.selectedPiece) {
-    // Check if released over board
-    const cell = getCellFromPoint(event.clientX, event.clientY);
-    if (cell) {
-      const coords = parseCellCoordinates(cell);
-      if (!Number.isNaN(coords.x) && !Number.isNaN(coords.y)) {
-        clearPreview(false);
-        activePreviewAnchor = null;
-        handleBoardClick(coords.x, coords.y);
-        suppressClickUntil = Date.now() + 400;
-        return;
+      if (!ghostAnchor || ghostAnchor.x !== coords.x || ghostAnchor.y !== coords.y) {
+        ghostAnchor = coords;
+        updateBoardGhost();
       }
     }
   }
-
-  clearPreview();
-  activePreviewAnchor = null;
 }
 
-function handleInventoryPointerCancel(event) {
-  if (inventoryDragPointerId !== event.pointerId) return;
+function handleGhostPointerUp(event) {
+  if (!isDraggingGhost || ghostPointerId !== event.pointerId) return;
 
-  removeDragGhost();
-  inventoryDragPointerId = null;
-  isDraggingFromInventory = false;
-  clearPreview();
-  activePreviewAnchor = null;
+  event.preventDefault();
+
+  if (boardGhostEl) {
+    boardGhostEl.releasePointerCapture(event.pointerId);
+    boardGhostEl.classList.remove('dragging');
+  }
+
+  isDraggingGhost = false;
+  ghostPointerId = null;
+
+  // Try to place if valid
+  if (ghostAnchor && state.selectedPiece && state.selectedOrientation) {
+    const color = getCurrentColor();
+    const placement = state.selectedOrientation.map(([dx, dy]) => ({
+      x: ghostAnchor.x + dx,
+      y: ghostAnchor.y + dy
+    }));
+    const validity = validatePlacement(color, state.selectedPiece, placement);
+
+    if (validity.valid) {
+      removeBoardGhost();
+      applyPlacement(color, state.selectedPiece, placement);
+      suppressClickUntil = Date.now() + 400;
+    }
+  }
+}
+
+function handleGhostPointerCancel(event) {
+  if (ghostPointerId !== event.pointerId) return;
+
+  if (boardGhostEl) {
+    boardGhostEl.classList.remove('dragging');
+  }
+
+  isDraggingGhost = false;
+  ghostPointerId = null;
 }
 
 function validatePlacement(color, pieceId, cells) {
@@ -616,14 +638,17 @@ function applyPlacement(color, pieceId, cells) {
   state.firstMoveCompleted[color] = true;
   state.log.push(`${color} placed ${pieceId} at ${cells.map(({ x, y }) => `${String.fromCharCode(65 + x)}${y + 1}`).join(', ')}`);
   updateBoardUI();
-  renderInventory();
   renderScores();
   renderLog();
   updateStatus(`${color} placed ${pieceId}.`);
+  // Clean up selection and ghost
   state.selectedPiece = null;
   state.selectedOrientation = null;
   state.selectedOrientationIndex = null;
+  removeBoardGhost();
+  ghostAnchor = null;
   state.passChain = 0;
+  renderInventory();
   advanceTurn();
 }
 
@@ -658,11 +683,12 @@ function selectPiece(pieceId) {
   state.selectedOrientationIndex = 0;
   state.selectedOrientation = orientations[state.selectedOrientationIndex];
   updateSelectedPieceLabel();
-  updateStatus(`Selected ${pieceId}. Drag to board or tap a cell to place.`);
   // Update visual selection on piece cards
   inventoryGrid.querySelectorAll('.piece-card').forEach(card => {
     card.classList.toggle('selected', card.dataset.pieceId === pieceId);
   });
+  // Spawn draggable ghost on the board
+  createBoardGhost();
 }
 
 function rotateSelectedPiece(direction) {
@@ -680,8 +706,9 @@ function rotateSelectedPiece(direction) {
   }
   state.selectedOrientation = orientations[state.selectedOrientationIndex];
   updateSelectedPieceLabel();
-  if (activePreviewAnchor) {
-    showPlacementPreview(activePreviewAnchor.x, activePreviewAnchor.y);
+  // Update board ghost if present
+  if (boardGhostEl) {
+    updateBoardGhost();
   }
 }
 
@@ -704,8 +731,9 @@ function flipSelectedPiece() {
     state.selectedOrientation = orientations[state.selectedOrientationIndex];
   }
   updateSelectedPieceLabel();
-  if (activePreviewAnchor) {
-    showPlacementPreview(activePreviewAnchor.x, activePreviewAnchor.y);
+  // Update board ghost if present
+  if (boardGhostEl) {
+    updateBoardGhost();
   }
 }
 
@@ -845,10 +873,10 @@ boardEl.addEventListener('pointerup', handleBoardPointerUp);
 boardEl.addEventListener('pointercancel', handleBoardPointerCancel);
 boardEl.addEventListener('click', handleBoardClickSuppression, true);
 
-// Global listeners for inventory drag (need to track across entire document)
-document.addEventListener('pointermove', handleInventoryPointerMove);
-document.addEventListener('pointerup', handleInventoryPointerUp);
-document.addEventListener('pointercancel', handleInventoryPointerCancel);
+// Global listeners for ghost dragging (ghost captures pointer, but we need move/up on document)
+document.addEventListener('pointermove', handleGhostPointerMove);
+document.addEventListener('pointerup', handleGhostPointerUp);
+document.addEventListener('pointercancel', handleGhostPointerCancel);
 
 startButton.addEventListener('click', initializeGame);
 playerCountSelect.addEventListener('change', () => {
