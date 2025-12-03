@@ -417,16 +417,52 @@ function handleBoardClickSuppression(event) {
 // --- Board ghost preview system ---
 // When a piece is selected, a draggable ghost appears on the board
 
-function getStartingCorner() {
+function getStartingPosition() {
   const color = getCurrentColor();
   const colorConfig = getColorConfig(color);
   if (!colorConfig) return { x: 10, y: 10 }; // Center fallback
 
-  // For first move, start at the player's corner
+  // For first move, find a position where piece covers the corner and stays on board
   if (!state.firstMoveCompleted[color]) {
-    return { x: colorConfig.corner.x, y: colorConfig.corner.y };
+    const corner = colorConfig.corner;
+    const orientation = state.selectedOrientation;
+    if (!orientation) return corner;
+
+    // Find piece bounds
+    const minX = Math.min(...orientation.map(([x]) => x));
+    const maxX = Math.max(...orientation.map(([x]) => x));
+    const minY = Math.min(...orientation.map(([, y]) => y));
+    const maxY = Math.max(...orientation.map(([, y]) => y));
+
+    // Try to find an anchor position where:
+    // 1. The piece covers the corner
+    // 2. The piece stays within the board
+    for (const [dx, dy] of orientation) {
+      // If we anchor at (corner.x - dx, corner.y - dy), this cell covers the corner
+      const anchorX = corner.x - dx;
+      const anchorY = corner.y - dy;
+
+      // Check if all cells would be within bounds
+      let allInBounds = true;
+      for (const [pdx, pdy] of orientation) {
+        const cellX = anchorX + pdx;
+        const cellY = anchorY + pdy;
+        if (cellX < 0 || cellX >= BOARD_SIZE || cellY < 0 || cellY >= BOARD_SIZE) {
+          allInBounds = false;
+          break;
+        }
+      }
+
+      if (allInBounds) {
+        return { x: anchorX, y: anchorY };
+      }
+    }
+
+    // Fallback: just use corner (may be partially off-board)
+    return corner;
   }
-  // Otherwise start at center of board
+
+  // For subsequent moves, start at center
   return { x: 10, y: 10 };
 }
 
@@ -444,8 +480,8 @@ function createBoardGhost() {
   // Add pointer handlers to the ghost for dragging
   ghost.addEventListener('pointerdown', handleGhostPointerDown);
 
-  // Position at starting location
-  const startPos = getStartingCorner();
+  // Position at a valid starting location (covers corner, stays on board)
+  const startPos = getStartingPosition();
   ghostAnchor = startPos;
   updateBoardGhost();
 }
