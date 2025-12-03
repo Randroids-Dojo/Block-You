@@ -521,12 +521,8 @@ function updateBoardGhost() {
   const placement = orientation.map(([dx, dy]) => ({ x: ghostAnchor.x + dx, y: ghostAnchor.y + dy }));
   const validity = validatePlacement(color, state.selectedPiece, placement);
 
-  // Get board cell size for positioning
-  const firstCell = boardEl.querySelector('.board-cell');
-  if (!firstCell) return;
-  const cellRect = firstCell.getBoundingClientRect();
-  const cellSize = cellRect.width;
-  const gap = 2; // CSS gap
+  // Get board position for reference
+  const boardRect = boardEl.getBoundingClientRect();
 
   // Create ghost cells at the correct board positions
   orientation.forEach(([dx, dy]) => {
@@ -536,12 +532,19 @@ function updateBoardGhost() {
     // Skip cells outside board
     if (cellX < 0 || cellX >= BOARD_SIZE || cellY < 0 || cellY >= BOARD_SIZE) return;
 
+    // Get the actual board cell at this position to align ghost perfectly
+    const targetCell = getBoardCell(cellX, cellY);
+    if (!targetCell) return;
+
+    const cellRect = targetCell.getBoundingClientRect();
+
     const ghostCell = document.createElement('div');
     ghostCell.className = 'ghost-piece-cell';
-    ghostCell.style.width = `${cellSize}px`;
-    ghostCell.style.height = `${cellSize}px`;
-    ghostCell.style.left = `${cellX * (cellSize + gap)}px`;
-    ghostCell.style.top = `${cellY * (cellSize + gap)}px`;
+    ghostCell.style.width = `${cellRect.width}px`;
+    ghostCell.style.height = `${cellRect.height}px`;
+    // Position relative to board container
+    ghostCell.style.left = `${cellRect.left - boardRect.left}px`;
+    ghostCell.style.top = `${cellRect.top - boardRect.top}px`;
     ghostCell.style.setProperty('--ghost-color', colorConfig?.cssVar ?? '#666');
     ghostCell.dataset.valid = validity.valid ? 'true' : 'false';
     boardGhostEl.appendChild(ghostCell);
