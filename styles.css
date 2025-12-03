@@ -292,6 +292,44 @@
   font-weight: 500;
 }
 
+/* Debug Panel */
+.debug-panel {
+  margin-top: 1.5rem;
+  padding: 0.75rem;
+  background: rgba(0, 0, 0, 0.05);
+  border-radius: 8px;
+  font-size: 0.75rem;
+  font-family: monospace;
+  max-height: 150px;
+  overflow-y: auto;
+}
+
+.debug-panel h4 {
+  margin: 0 0 0.5rem;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+#debug-log {
+  white-space: pre-wrap;
+  word-break: break-all;
+  color: var(--text);
+  line-height: 1.4;
+}
+
+#debug-log .debug-error {
+  color: var(--error);
+}
+
+#debug-log .debug-success {
+  color: var(--success);
+}
+
+#debug-log .debug-info {
+  color: var(--blue);
+}
+
 /* Game Screen Styles */
 .game-screen {
   display: flex;

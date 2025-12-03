@@ -58,6 +58,20 @@ const passBtn = document.querySelector('#pass');
 const yourColorIndicator = document.querySelector('#your-color-indicator');
 const roomCodeSmall = document.querySelector('#room-code-small');
 const leaveGameFooterBtn = document.querySelector('#leave-game-footer-btn');
+const debugLog = document.querySelector('#debug-log');
+
+// ========== Debug Logging ==========
+function debug(message, type = 'info') {
+  const timestamp = new Date().toLocaleTimeString();
+  const line = document.createElement('div');
+  line.className = `debug-${type}`;
+  line.textContent = `[${timestamp}] ${message}`;
+  if (debugLog) {
+    debugLog.appendChild(line);
+    debugLog.scrollTop = debugLog.scrollHeight;
+  }
+  console.log(`[${type.toUpperCase()}]`, message);
+}
 
 // ========== Game State ==========
 const initialState = () => ({
@@ -159,11 +173,15 @@ function updateHostWaitingRoom() {
   const playerCount = Object.keys(assignments).length;
   const neededPlayers = expectedPlayerCount;
 
+  debug(`Updating host waiting room: ${playerCount}/${neededPlayers} players`, 'info');
+  debug(`Assignments: ${JSON.stringify(assignments)}`, 'info');
+
   updatePlayersList(assignments, playersList, networkManager.localPlayerId);
 
   // Always allow starting if at least 1 player (host) is connected
   if (playerCount >= 1) {
     startMultiplayerBtn.disabled = false;
+    debug('Start button ENABLED', 'success');
     if (playerCount >= neededPlayers) {
       waitingText.textContent = 'All players connected! Ready to start.';
       startMultiplayerBtn.textContent = 'Start Game';
@@ -174,6 +192,7 @@ function updateHostWaitingRoom() {
   } else {
     waitingText.textContent = 'Setting up...';
     startMultiplayerBtn.disabled = true;
+    debug('Start button DISABLED (no players)', 'error');
   }
 }
 
@@ -247,20 +266,28 @@ backFromJoinBtn.addEventListener('click', () => {
 
 createGameBtn.addEventListener('click', async () => {
   expectedPlayerCount = Number(playerCountSelect.value);
+  debug(`Creating game for ${expectedPlayerCount} players...`, 'info');
   showConnecting('Creating game...');
 
   try {
     setupNetworkHandlers();
+    debug('Network handlers set up', 'info');
+
     const result = await networkManager.createGame(expectedPlayerCount);
+    debug(`Game created! Room: ${result.roomCode}, Color: ${result.assignedColor}`, 'success');
     hideConnecting();
 
     roomCodeDisplay.textContent = result.roomCode;
     myColor = result.assignedColor;
     isMultiplayer = true;
 
+    debug(`isHost after create: ${networkManager.isHost}`, 'info');
+    debug(`localPlayerId: ${networkManager.localPlayerId}`, 'info');
+
     updateHostWaitingRoom();
     showLobbySection('host-waiting');
   } catch (err) {
+    debug(`Create game error: ${err.message}`, 'error');
     hideConnecting();
     showError(err.message || 'Failed to create game');
   }
@@ -336,46 +363,73 @@ errorDismissBtn.addEventListener('click', () => {
 });
 
 function handleStartGame() {
-  console.log('Start game clicked', { isHost: networkManager.isHost, disabled: startMultiplayerBtn.disabled });
+  debug('Start button clicked', 'info');
+  debug(`isHost: ${networkManager.isHost}`, 'info');
+  debug(`Button disabled: ${startMultiplayerBtn.disabled}`, 'info');
+  debug(`Player assignments: ${JSON.stringify(networkManager.playerAssignments)}`, 'info');
 
   if (!networkManager.isHost) {
-    console.log('Not host, ignoring');
+    debug('ERROR: Not host, cannot start', 'error');
     return;
   }
 
   if (startMultiplayerBtn.disabled) {
-    console.log('Button disabled, ignoring');
+    debug('ERROR: Button is disabled', 'error');
     return;
   }
 
-  // Initialize game state
-  const playerCount = Object.keys(networkManager.playerAssignments).length;
-  console.log('Starting game with', playerCount, 'players');
+  try {
+    // Initialize game state
+    const playerCount = Object.keys(networkManager.playerAssignments).length;
+    debug(`Starting game with ${playerCount} players`, 'success');
 
-  // Each connected player gets one color
-  // Use only the colors that have been assigned to connected players
-  const assignedColors = Object.values(networkManager.playerAssignments);
-  // Sort colors to maintain Blue -> Yellow -> Red -> Green turn order
-  const colorOrder = ['Blue', 'Yellow', 'Red', 'Green'];
-  const activeColors = colorOrder.filter(c => assignedColors.includes(c));
+    // Each connected player gets one color
+    // Use only the colors that have been assigned to connected players
+    const assignedColors = Object.values(networkManager.playerAssignments);
+    debug(`Assigned colors: ${assignedColors.join(', ')}`, 'info');
 
-  state = initialState();
-  state.activeColors = activeColors;
-  state.turnIndex = 0;
-  state.firstMoveCompleted = Object.fromEntries(activeColors.map(color => [color, false]));
-  state.usedPieces = Object.fromEntries(activeColors.map(color => [color, new Set()]));
+    // Sort colors to maintain Blue -> Yellow -> Red -> Green turn order
+    const colorOrder = ['Blue', 'Yellow', 'Red', 'Green'];
+    const activeColors = colorOrder.filter(c => assignedColors.includes(c));
+    debug(`Active colors: ${activeColors.join(', ')}`, 'info');
 
-  // Broadcast game start to all clients
-  networkManager.startGame(serializeState());
+    state = initialState();
+    state.activeColors = activeColors;
+    state.turnIndex = 0;
+    state.firstMoveCompleted = Object.fromEntries(activeColors.map(color => [color, false]));
+    state.usedPieces = Object.fromEntries(activeColors.map(color => [color, new Set()]));
 
-  // Start locally as host
-  startGameWithState(serializeState());
+    debug('Game state initialized', 'success');
+
+    // Broadcast game start to all clients
+    const serialized = serializeState();
+    debug('Broadcasting game start...', 'info');
+    networkManager.startGame(serialized);
+
+    // Start locally as host
+    debug('Starting game locally...', 'info');
+    startGameWithState(serialized);
+    debug('Game started successfully!', 'success');
+  } catch (err) {
+    debug(`ERROR: ${err.message}`, 'error');
+    debug(`Stack: ${err.stack}`, 'error');
+  }
 }
 
-startMultiplayerBtn.addEventListener('click', handleStartGame);
+startMultiplayerBtn.addEventListener('click', (e) => {
+  debug('Click event on start button', 'info');
+  handleStartGame();
+});
+
 // Also handle touch for mobile
+startMultiplayerBtn.addEventListener('touchstart', (e) => {
+  debug('Touchstart on start button', 'info');
+});
+
 startMultiplayerBtn.addEventListener('touchend', (e) => {
+  debug('Touchend on start button', 'info');
   e.preventDefault();
+  e.stopPropagation();
   handleStartGame();
 });
 
@@ -1429,3 +1483,8 @@ document.addEventListener('pointercancel', handleGhostPointerCancel);
 
 // Initialize with lobby visible
 showLobbySection('lobby-menu');
+
+// Initialization debug
+debug('Block-You initialized', 'success');
+debug(`Start button element: ${startMultiplayerBtn ? 'found' : 'NOT FOUND'}`, startMultiplayerBtn ? 'info' : 'error');
+debug(`User agent: ${navigator.userAgent.substring(0, 50)}...`, 'info');
