@@ -161,11 +161,18 @@ function updateHostWaitingRoom() {
 
   updatePlayersList(assignments, playersList, networkManager.localPlayerId);
 
-  if (playerCount >= neededPlayers) {
-    waitingText.textContent = 'All players connected! Ready to start.';
+  // Always allow starting if at least 1 player (host) is connected
+  if (playerCount >= 1) {
     startMultiplayerBtn.disabled = false;
+    if (playerCount >= neededPlayers) {
+      waitingText.textContent = 'All players connected! Ready to start.';
+      startMultiplayerBtn.textContent = 'Start Game';
+    } else {
+      waitingText.textContent = `Waiting for ${neededPlayers - playerCount} more player(s)... (or start now)`;
+      startMultiplayerBtn.textContent = `Start with ${playerCount} Player${playerCount > 1 ? 's' : ''}`;
+    }
   } else {
-    waitingText.textContent = `Waiting for ${neededPlayers - playerCount} more player(s)...`;
+    waitingText.textContent = 'Setting up...';
     startMultiplayerBtn.disabled = true;
   }
 }
@@ -328,12 +335,29 @@ errorDismissBtn.addEventListener('click', () => {
   lobbyError.hidden = true;
 });
 
-startMultiplayerBtn.addEventListener('click', () => {
-  if (!networkManager.isHost) return;
+function handleStartGame() {
+  console.log('Start game clicked', { isHost: networkManager.isHost, disabled: startMultiplayerBtn.disabled });
+
+  if (!networkManager.isHost) {
+    console.log('Not host, ignoring');
+    return;
+  }
+
+  if (startMultiplayerBtn.disabled) {
+    console.log('Button disabled, ignoring');
+    return;
+  }
 
   // Initialize game state
   const playerCount = Object.keys(networkManager.playerAssignments).length;
-  const activeColors = COLORS.slice(0, playerCount).map(c => c.name);
+  console.log('Starting game with', playerCount, 'players');
+
+  // Each connected player gets one color
+  // Use only the colors that have been assigned to connected players
+  const assignedColors = Object.values(networkManager.playerAssignments);
+  // Sort colors to maintain Blue -> Yellow -> Red -> Green turn order
+  const colorOrder = ['Blue', 'Yellow', 'Red', 'Green'];
+  const activeColors = colorOrder.filter(c => assignedColors.includes(c));
 
   state = initialState();
   state.activeColors = activeColors;
@@ -346,6 +370,13 @@ startMultiplayerBtn.addEventListener('click', () => {
 
   // Start locally as host
   startGameWithState(serializeState());
+}
+
+startMultiplayerBtn.addEventListener('click', handleStartGame);
+// Also handle touch for mobile
+startMultiplayerBtn.addEventListener('touchend', (e) => {
+  e.preventDefault();
+  handleStartGame();
 });
 
 leaveGameFooterBtn.addEventListener('click', () => {
