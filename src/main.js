@@ -203,40 +203,46 @@ function updateClientWaitingRoom() {
 
 // ========== Network Event Handlers ==========
 function setupNetworkHandlers() {
+  debug('Setting up network handlers', 'info');
+
   networkManager.onPlayerJoin = (peerId, color) => {
-    console.log(`Player joined: ${peerId} as ${color}`);
+    debug(`Player joined: ${peerId} as ${color}`, 'success');
     updateHostWaitingRoom();
   };
 
   networkManager.onPlayerLeave = (peerId, color) => {
-    console.log(`Player left: ${peerId} (${color})`);
+    debug(`Player left: ${peerId} (${color})`, 'error');
     if (isMultiplayer && !state.gameOver) {
-      // Player disconnected during game
       updateStatus(`${color} disconnected from the game.`);
     }
     updateHostWaitingRoom();
   };
 
   networkManager.onPlayerAssignmentsUpdate = (assignments) => {
+    debug(`Assignments updated: ${JSON.stringify(assignments)}`, 'info');
     updateClientWaitingRoom();
   };
 
   networkManager.onGameStart = (gameState, playerAssignments) => {
-    console.log('Game starting!', gameState, playerAssignments);
+    debug('onGameStart received!', 'success');
+    debug(`playerAssignments: ${JSON.stringify(playerAssignments)}`, 'info');
     myColor = networkManager.getMyColor();
+    debug(`My color set to: ${myColor}`, 'info');
     startGameWithState(gameState);
   };
 
   networkManager.onStateUpdate = (newState) => {
+    debug('State update received', 'info');
     applyNetworkState(newState);
   };
 
   networkManager.onPlayerAction = (action, peerId) => {
-    // Host processes actions
+    debug(`Player action from ${peerId}: ${action.type}`, 'info');
     handlePlayerAction(action, peerId);
   };
 
   networkManager.onActionResult = (success, newState, reason) => {
+    debug(`Action result: ${success ? 'success' : 'failed'} - ${reason || 'ok'}`, success ? 'success' : 'error');
     if (success) {
       applyNetworkState(newState);
     } else {
@@ -574,24 +580,54 @@ function handlePlayerAction(action, peerId) {
 }
 
 function startGameWithState(networkState) {
-  state = deserializeState(networkState);
+  debug('startGameWithState called', 'info');
 
-  // Show game screen
-  lobbyScreen.hidden = true;
-  gameScreen.hidden = false;
+  try {
+    state = deserializeState(networkState);
+    debug('State deserialized', 'success');
 
-  // Set up game UI
-  yourColorIndicator.textContent = `You: ${myColor}`;
-  yourColorIndicator.dataset.color = myColor;
-  roomCodeSmall.textContent = `Room: ${networkManager.roomCode}`;
+    // Show game screen
+    debug(`lobbyScreen element: ${lobbyScreen ? 'found' : 'NOT FOUND'}`, lobbyScreen ? 'info' : 'error');
+    debug(`gameScreen element: ${gameScreen ? 'found' : 'NOT FOUND'}`, gameScreen ? 'info' : 'error');
 
-  createBoard();
-  updateBoardUI();
-  renderInventory();
-  renderScores();
-  renderLog();
-  updateTurnIndicator();
-  checkAutoPass();
+    if (lobbyScreen) {
+      lobbyScreen.hidden = true;
+      lobbyScreen.style.display = 'none';
+      debug('Lobby screen hidden', 'success');
+    }
+
+    if (gameScreen) {
+      gameScreen.hidden = false;
+      gameScreen.style.display = 'flex';
+      debug('Game screen shown', 'success');
+    }
+
+    // Set up game UI
+    debug(`myColor: ${myColor}`, 'info');
+    if (yourColorIndicator) {
+      yourColorIndicator.textContent = `You: ${myColor}`;
+      yourColorIndicator.dataset.color = myColor;
+    }
+    if (roomCodeSmall) {
+      roomCodeSmall.textContent = `Room: ${networkManager.roomCode}`;
+    }
+
+    debug('Creating board...', 'info');
+    createBoard();
+    debug('Board created', 'success');
+
+    updateBoardUI();
+    renderInventory();
+    renderScores();
+    renderLog();
+    updateTurnIndicator();
+    checkAutoPass();
+
+    debug('Game UI fully initialized', 'success');
+  } catch (err) {
+    debug(`startGameWithState ERROR: ${err.message}`, 'error');
+    debug(`Stack: ${err.stack}`, 'error');
+  }
 }
 
 function resetState() {
