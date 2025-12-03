@@ -146,6 +146,7 @@ function resetPreviewState() {
 }
 
 function initializeGame() {
+  console.log('initializeGame called');
   resetState();
   clearPreview();
   resetPreviewState();
@@ -261,6 +262,7 @@ function updateStatus(message) {
 }
 
 function handleBoardClick(x, y) {
+  console.log('handleBoardClick called:', x, y);
   if (state.gameOver) return;
   const color = getCurrentColor();
   if (!color) return;
@@ -486,9 +488,16 @@ function checkAutoPass() {
 }
 
 function selectPiece(pieceId) {
+  console.log('selectPiece called:', pieceId);
   const color = getCurrentColor();
-  if (!color) return;
-  if (state.gameOver) return;
+  if (!color) {
+    console.log('No current color');
+    return;
+  }
+  if (state.gameOver) {
+    console.log('Game is over');
+    return;
+  }
   if (state.usedPieces[color].has(pieceId)) {
     updateStatus('Piece already used.');
     return;
@@ -499,6 +508,7 @@ function selectPiece(pieceId) {
   state.selectedOrientation = orientations[state.selectedOrientationIndex];
   updateSelectedPieceLabel();
   updateStatus(`Selected ${pieceId}. Tap a board cell to place.`);
+  console.log('Piece selected successfully:', pieceId);
 }
 
 function rotateSelectedPiece(direction) {
