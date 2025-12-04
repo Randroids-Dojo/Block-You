@@ -612,10 +612,10 @@ The implementation faithfully follows the Gherkin specification from PROMPT.md. 
 
 ## Recommendations for Next Steps
 
-1. **Immediate (Mobile Web Playability):** Focus on tasks in TASKS.md
+1. **Immediate (Mobile Web Playability):** Focus on remaining tasks in TASKS.md
    - Portrait mode layout optimization
    - Small screen support
-   - PWA features
+   - Haptic feedback
 
 2. **Short-term (UI Polish):**
    - Add player indicators for 2-player mode
@@ -626,4 +626,18 @@ The implementation faithfully follows the Gherkin specification from PROMPT.md. 
    - Undo/redo functionality
    - Save/load game state
    - AI opponent
-   - Multiplayer over network
+
+## Recently Completed Features
+
+### Multiplayer over Network ✅
+- WebRTC peer-to-peer multiplayer via PeerJS
+- Room-based matchmaking with 6-character codes
+- Host/client architecture with state synchronization
+- See `src/networking.js` for implementation
+
+### PWA Support ✅
+- App is installable on mobile devices
+- Offline caching via service worker
+- App icons (192x192, 512x512)
+- Install prompt handling
+- See `manifest.json`, `sw.js`, and `src/main.js:7-52`
