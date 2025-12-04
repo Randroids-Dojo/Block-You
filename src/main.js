@@ -390,7 +390,8 @@ backFromJoinBtn.addEventListener('click', () => {
 createGameBtn.addEventListener('click', async () => {
   expectedPlayerCount = Number(playerCountSelect.value);
   const localSelectValue = localPlayerCountSelect?.value;
-  localPlayerCount = Number(localSelectValue ?? 1);
+  // Clamp local players to not exceed total players
+  localPlayerCount = Math.min(Number(localSelectValue ?? 1), expectedPlayerCount);
   debug(`localPlayerCountSelect value: "${localSelectValue}", parsed: ${localPlayerCount}`, 'info');
   debug(`Creating game for ${expectedPlayerCount} players, ${localPlayerCount} local...`, 'info');
   showConnecting('Creating game...');
