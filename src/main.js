@@ -668,7 +668,7 @@ function handlePlayerAction(action, peerId) {
     }
 
     // Apply placement
-    applyPlacementInternal(playerColor, action.pieceId, placement);
+    applyPlacementInternal(currentColor, action.pieceId, placement);
 
     // Broadcast new state to all
     networkManager.broadcastState(serializeState());
