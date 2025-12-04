@@ -1,6 +1,56 @@
 import { PIECE_DEFINITIONS, getPieceOrientationsById, normalizeShape } from './pieces.js';
 import { networkManager } from './networking.js';
 
+// ========== PWA Service Worker Registration ==========
+let deferredInstallPrompt = null;
+
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js')
+      .then((registration) => {
+        console.log('[PWA] Service Worker registered:', registration.scope);
+
+        // Check for updates
+        registration.addEventListener('updatefound', () => {
+          const newWorker = registration.installing;
+          newWorker?.addEventListener('statechange', () => {
+            if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+              console.log('[PWA] New version available');
+            }
+          });
+        });
+      })
+      .catch((error) => {
+        console.warn('[PWA] Service Worker registration failed:', error);
+      });
+  });
+}
+
+// Handle install prompt
+window.addEventListener('beforeinstallprompt', (event) => {
+  event.preventDefault();
+  deferredInstallPrompt = event;
+  console.log('[PWA] Install prompt available');
+
+  // Show install button
+  const installBtn = document.querySelector('#install-btn');
+  if (installBtn) {
+    installBtn.hidden = false;
+  }
+});
+
+// Handle successful install
+window.addEventListener('appinstalled', () => {
+  console.log('[PWA] App installed successfully');
+  deferredInstallPrompt = null;
+
+  // Hide install button
+  const installBtn = document.querySelector('#install-btn');
+  if (installBtn) {
+    installBtn.hidden = true;
+  }
+});
+
 const BOARD_SIZE = 20;
 
 const COLORS = [
@@ -1519,6 +1569,67 @@ document.addEventListener('pointercancel', handleGhostPointerCancel);
 
 // Initialize with lobby visible
 showLobbySection('lobby-menu');
+
+// ========== PWA Install Button Handler ==========
+const installBtn = document.querySelector('#install-btn');
+if (installBtn) {
+  installBtn.addEventListener('click', async () => {
+    if (!deferredInstallPrompt) {
+      debug('Install prompt not available', 'error');
+      return;
+    }
+
+    debug('Showing install prompt', 'info');
+    deferredInstallPrompt.prompt();
+
+    const { outcome } = await deferredInstallPrompt.userChoice;
+    debug(`Install prompt outcome: ${outcome}`, outcome === 'accepted' ? 'success' : 'info');
+
+    if (outcome === 'accepted') {
+      installBtn.hidden = true;
+    }
+
+    deferredInstallPrompt = null;
+  });
+}
+
+// ========== Debug Panel Toggle (7-tap secret) ==========
+const debugPanel = document.querySelector('#debug-panel');
+const lobbyTitle = document.querySelector('.lobby-header h1');
+let debugTapCount = 0;
+let debugTapTimeout = null;
+
+// Check if debug mode was previously enabled
+if (localStorage.getItem('blockYouDebugMode') === 'true' && debugPanel) {
+  debugPanel.classList.add('visible');
+}
+
+if (lobbyTitle) {
+  lobbyTitle.style.cursor = 'default'; // Prevent text selection cursor hint
+  lobbyTitle.addEventListener('click', () => {
+    debugTapCount++;
+
+    // Reset timeout on each tap
+    if (debugTapTimeout) {
+      clearTimeout(debugTapTimeout);
+    }
+
+    // Reset counter if taps are too slow (2 second window)
+    debugTapTimeout = setTimeout(() => {
+      debugTapCount = 0;
+    }, 2000);
+
+    // Toggle debug panel after 7 taps
+    if (debugTapCount >= 7) {
+      debugTapCount = 0;
+      if (debugPanel) {
+        const isVisible = debugPanel.classList.toggle('visible');
+        localStorage.setItem('blockYouDebugMode', isVisible ? 'true' : 'false');
+        debug(isVisible ? 'Debug mode enabled' : 'Debug mode disabled', 'success');
+      }
+    }
+  });
+}
 
 // Initialization debug
 debug('Block-You initialized', 'success');

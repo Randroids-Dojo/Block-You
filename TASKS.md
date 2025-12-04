@@ -8,6 +8,10 @@
 - Board scales to fit screen
 - Touch-friendly drag-and-drop for piece placement
 - Basic responsive CSS with 768px breakpoint
+- Remote multiplayer via WebRTC/PeerJS
+- PWA support with install prompt and offline caching
+- Safe area support for notched devices
+- Dark mode support
 
 ## Tasks for Full Mobile Web Playability
 
@@ -56,43 +60,42 @@
 
 ### High Priority (P1)
 
-#### 4. PWA Support - Make Game Installable
-**Problem:** Not installable as a mobile app
+#### 4. PWA Support - Make Game Installable ✅ COMPLETED
+**Status:** Fully implemented
 
-**New files to create:**
-- `manifest.json` - PWA manifest
-- `sw.js` - Service worker for offline support
-- App icons in various sizes
+**Files created/modified:**
+- `manifest.json` - PWA manifest with app metadata
+- `sw.js` - Service worker for offline caching
+- `icon-192.png`, `icon-512.png` - App icons
+- `index.html` - PWA meta tags added
+- `src/main.js` - Service worker registration and install prompt handling
+- `styles.css` - Install button styling
 
-**Tasks:**
-- [ ] Create `manifest.json` with:
+**Completed tasks:**
+- [x] Create `manifest.json` with:
   - App name: "Block-You"
   - Short name: "Block-You"
   - Description
-  - Theme color: #4CAF50 (green from current design)
-  - Background color: #1a1a1a (dark mode) or white
+  - Theme color: #2196f3 (blue from current design)
+  - Background color: #f5f5f5
   - Display: "standalone"
   - Start URL: "/"
   - Icons: 192x192, 512x512
-- [ ] Create app icons (192x192, 512x512 PNG)
-- [ ] Add manifest link to `index.html`
-- [ ] Create basic service worker for offline caching
-- [ ] Register service worker in `main.js`
-- [ ] Add "Add to Home Screen" prompt for iOS users
+- [x] Create app icons (192x192, 512x512 PNG)
+- [x] Add manifest link to `index.html`
+- [x] Create basic service worker for offline caching
+- [x] Register service worker in `main.js`
+- [x] Add "Install App" button to lobby menu
+- [x] Handle `beforeinstallprompt` event
+- [x] Handle `appinstalled` event
 
-#### 5. Safe Area Support for Notched Devices
-**Problem:** No handling for iPhone notches/cutouts
+#### 5. Safe Area Support for Notched Devices ✅ COMPLETED
+**Status:** Already implemented in existing CSS
 
-**Files to modify:**
-- `index.html` - Add viewport-fit meta tag
-- `styles.css` - Add safe-area-inset padding
-
-**Tasks:**
-- [ ] Add `viewport-fit=cover` to viewport meta tag
-- [ ] Add `padding-top: env(safe-area-inset-top)` to header
-- [ ] Add `padding-bottom: env(safe-area-inset-bottom)` to footer/controls
-- [ ] Add `padding-left/right: env(safe-area-inset-left/right)` to main container
-- [ ] Test on iOS Safari with notch
+**Implementation:**
+- `viewport-fit=cover` in viewport meta tag
+- `env(safe-area-inset-*)` padding applied to containers
+- Tested with iOS Safari notch support
 
 #### 6. Haptic Feedback
 **Problem:** No tactile feedback on successful placement
@@ -270,16 +273,22 @@
 - [ ] Fast game start
 
 ### Edge Cases
-- [ ] Works offline (PWA)
+- [x] Works offline (PWA) - Service worker caches all static assets
 - [ ] Survives page refresh (save state?)
 - [ ] Handles low battery mode
 - [ ] Works with reduced motion preference
-- [ ] Works with dark mode preference
+- [x] Works with dark mode preference
 
 ## File Reference
 
 - **Main game logic:** `src/main.js`
 - **Piece definitions:** `src/pieces.js`
+- **Networking (WebRTC):** `src/networking.js`
 - **Styles:** `styles.css`
 - **HTML structure:** `index.html`
-- **Touch events:** `src/main.js:297-403` (pointer event handlers)
+- **PWA manifest:** `manifest.json`
+- **Service worker:** `sw.js`
+- **App icons:** `icon-192.png`, `icon-512.png`
+- **Icon generator:** `scripts/generate-icons.js`
+- **Touch events:** `src/main.js` (pointer event handlers)
+- **PWA registration:** `src/main.js:7-52` (service worker and install prompt)

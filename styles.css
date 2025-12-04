@@ -101,6 +101,17 @@
   cursor: not-allowed;
 }
 
+.lobby-btn.install-btn {
+  background: linear-gradient(135deg, var(--green), #43a047);
+  color: white;
+  box-shadow: 0 4px 14px rgba(76, 175, 80, 0.4);
+  margin-top: 0.5rem;
+}
+
+.lobby-btn.install-btn:not(:disabled):hover {
+  box-shadow: 0 6px 20px rgba(76, 175, 80, 0.5);
+}
+
 .lobby-section {
   animation: fadeIn 0.3s ease;
 }
@@ -302,6 +313,11 @@
   font-family: monospace;
   max-height: 150px;
   overflow-y: auto;
+  display: none; /* Hidden by default */
+}
+
+.debug-panel.visible {
+  display: block;
 }
 
 .debug-panel h4 {
