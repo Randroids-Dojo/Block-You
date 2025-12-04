@@ -195,12 +195,16 @@ function updatePlayersList(assignments, listEl, localPeerId) {
   listEl.innerHTML = '';
   const allColors = ['Blue', 'Yellow', 'Red', 'Green'];
 
+  debug(`updatePlayersList: assignments=${JSON.stringify(assignments)}, localPeerId=${localPeerId}`, 'info');
+
   allColors.forEach(color => {
     // Find the peer that has this color assigned
     const peerId = Object.keys(assignments).find(id => {
       const peerColors = assignments[id];
       return Array.isArray(peerColors) ? peerColors.includes(color) : peerColors === color;
     });
+
+    debug(`Color ${color}: peerId=${peerId}`, 'info');
 
     if (peerId) {
       const li = document.createElement('li');
@@ -385,7 +389,9 @@ backFromJoinBtn.addEventListener('click', () => {
 
 createGameBtn.addEventListener('click', async () => {
   expectedPlayerCount = Number(playerCountSelect.value);
-  localPlayerCount = Number(localPlayerCountSelect?.value ?? 1);
+  const localSelectValue = localPlayerCountSelect?.value;
+  localPlayerCount = Number(localSelectValue ?? 1);
+  debug(`localPlayerCountSelect value: "${localSelectValue}", parsed: ${localPlayerCount}`, 'info');
   debug(`Creating game for ${expectedPlayerCount} players, ${localPlayerCount} local...`, 'info');
   showConnecting('Creating game...');
 
