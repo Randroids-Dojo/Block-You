@@ -1593,6 +1593,44 @@ if (installBtn) {
   });
 }
 
+// ========== Debug Panel Toggle (7-tap secret) ==========
+const debugPanel = document.querySelector('#debug-panel');
+const lobbyTitle = document.querySelector('.lobby-header h1');
+let debugTapCount = 0;
+let debugTapTimeout = null;
+
+// Check if debug mode was previously enabled
+if (localStorage.getItem('blockYouDebugMode') === 'true' && debugPanel) {
+  debugPanel.classList.add('visible');
+}
+
+if (lobbyTitle) {
+  lobbyTitle.style.cursor = 'default'; // Prevent text selection cursor hint
+  lobbyTitle.addEventListener('click', () => {
+    debugTapCount++;
+
+    // Reset timeout on each tap
+    if (debugTapTimeout) {
+      clearTimeout(debugTapTimeout);
+    }
+
+    // Reset counter if taps are too slow (2 second window)
+    debugTapTimeout = setTimeout(() => {
+      debugTapCount = 0;
+    }, 2000);
+
+    // Toggle debug panel after 7 taps
+    if (debugTapCount >= 7) {
+      debugTapCount = 0;
+      if (debugPanel) {
+        const isVisible = debugPanel.classList.toggle('visible');
+        localStorage.setItem('blockYouDebugMode', isVisible ? 'true' : 'false');
+        debug(isVisible ? 'Debug mode enabled' : 'Debug mode disabled', 'success');
+      }
+    }
+  });
+}
+
 // Initialization debug
 debug('Block-You initialized', 'success');
 debug(`Start button element: ${startMultiplayerBtn ? 'found' : 'NOT FOUND'}`, startMultiplayerBtn ? 'info' : 'error');

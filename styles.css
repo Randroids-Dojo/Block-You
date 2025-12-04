@@ -313,6 +313,11 @@
   font-family: monospace;
   max-height: 150px;
   overflow-y: auto;
+  display: none; /* Hidden by default */
+}
+
+.debug-panel.visible {
+  display: block;
 }
 
 .debug-panel h4 {
