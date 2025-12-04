@@ -456,14 +456,16 @@ joinBtn.addEventListener('click', async () => {
     return;
   }
 
-  localPlayerCount = Number(joinLocalPlayerCountSelect?.value ?? 1);
+  const requestedLocalPlayers = Number(joinLocalPlayerCountSelect?.value ?? 1);
+  localPlayerCount = requestedLocalPlayers;
   showConnecting('Joining game...');
 
   try {
     setupNetworkHandlers();
-    const result = await networkManager.joinGame(code, localPlayerCount);
+    const result = await networkManager.joinGame(code, requestedLocalPlayers);
     hideConnecting();
 
+    const assignedCount = result.assignedColors.length;
     myColors = new Set(result.assignedColors);
     isMultiplayer = true;
     expectedPlayerCount = 4; // Will be updated when game starts
@@ -472,6 +474,12 @@ joinBtn.addEventListener('click', async () => {
     const colorsList = result.assignedColors.join(', ');
     yourColorBadge.textContent = colorsList;
     yourColorBadge.dataset.color = result.assignedColors[0]; // Use first color for styling
+
+    // Show message if fewer players assigned than requested
+    if (assignedCount < requestedLocalPlayers) {
+      debug(`Only ${assignedCount} of ${requestedLocalPlayers} requested local players assigned`, 'info');
+    }
+
     updateClientWaitingRoom();
     showLobbySection('client-waiting');
   } catch (err) {
@@ -681,12 +689,12 @@ function handlePlayerAction(action, peerId) {
     networkManager.sendActionResult(peerId, true, serializeState());
 
   } else if (action.type === 'pass') {
-    if (hasLegalMove(playerColor)) {
+    if (hasLegalMove(currentColor)) {
       networkManager.sendActionResult(peerId, false, null, 'You have legal moves available');
       return;
     }
 
-    state.log.push(`${playerColor} passed.`);
+    state.log.push(`${currentColor} passed.`);
     state.passChain += 1;
 
     if (state.passChain >= state.activeColors.length) {
