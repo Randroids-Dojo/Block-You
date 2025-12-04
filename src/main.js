@@ -1,6 +1,56 @@
 import { PIECE_DEFINITIONS, getPieceOrientationsById, normalizeShape } from './pieces.js';
 import { networkManager } from './networking.js';
 
+// ========== PWA Service Worker Registration ==========
+let deferredInstallPrompt = null;
+
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js')
+      .then((registration) => {
+        console.log('[PWA] Service Worker registered:', registration.scope);
+
+        // Check for updates
+        registration.addEventListener('updatefound', () => {
+          const newWorker = registration.installing;
+          newWorker?.addEventListener('statechange', () => {
+            if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+              console.log('[PWA] New version available');
+            }
+          });
+        });
+      })
+      .catch((error) => {
+        console.warn('[PWA] Service Worker registration failed:', error);
+      });
+  });
+}
+
+// Handle install prompt
+window.addEventListener('beforeinstallprompt', (event) => {
+  event.preventDefault();
+  deferredInstallPrompt = event;
+  console.log('[PWA] Install prompt available');
+
+  // Show install button
+  const installBtn = document.querySelector('#install-btn');
+  if (installBtn) {
+    installBtn.hidden = false;
+  }
+});
+
+// Handle successful install
+window.addEventListener('appinstalled', () => {
+  console.log('[PWA] App installed successfully');
+  deferredInstallPrompt = null;
+
+  // Hide install button
+  const installBtn = document.querySelector('#install-btn');
+  if (installBtn) {
+    installBtn.hidden = true;
+  }
+});
+
 const BOARD_SIZE = 20;
 
 const COLORS = [
@@ -1519,6 +1569,29 @@ document.addEventListener('pointercancel', handleGhostPointerCancel);
 
 // Initialize with lobby visible
 showLobbySection('lobby-menu');
+
+// ========== PWA Install Button Handler ==========
+const installBtn = document.querySelector('#install-btn');
+if (installBtn) {
+  installBtn.addEventListener('click', async () => {
+    if (!deferredInstallPrompt) {
+      debug('Install prompt not available', 'error');
+      return;
+    }
+
+    debug('Showing install prompt', 'info');
+    deferredInstallPrompt.prompt();
+
+    const { outcome } = await deferredInstallPrompt.userChoice;
+    debug(`Install prompt outcome: ${outcome}`, outcome === 'accepted' ? 'success' : 'info');
+
+    if (outcome === 'accepted') {
+      installBtn.hidden = true;
+    }
+
+    deferredInstallPrompt = null;
+  });
+}
 
 // Initialization debug
 debug('Block-You initialized', 'success');
