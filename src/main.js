@@ -93,6 +93,9 @@ const errorDismissBtn = document.querySelector('#error-dismiss-btn');
 
 // Game elements
 const playerCountSelect = document.querySelector('#player-count');
+const localPlayerCountSelect = document.querySelector('#local-player-count');
+const joinLocalPlayerCountSelect = document.querySelector('#join-local-player-count');
+const localHintEl = document.querySelector('#local-hint');
 const boardEl = document.querySelector('#board');
 const turnIndicator = document.querySelector('#turn-indicator');
 const selectedPieceEl = document.querySelector('#selected-piece');
@@ -140,8 +143,9 @@ const initialState = () => ({
 
 let state = initialState();
 let isMultiplayer = false;
-let myColor = null;
+let myColors = new Set(); // Set of colors controlled by local players on this device
 let expectedPlayerCount = 4;
+let localPlayerCount = 1; // Number of players on this device
 
 let previewCells = [];
 let activePointerId = null;
@@ -189,10 +193,15 @@ function hideConnecting() {
 
 function updatePlayersList(assignments, listEl, localPeerId) {
   listEl.innerHTML = '';
-  const colors = ['Blue', 'Yellow', 'Red', 'Green'];
+  const allColors = ['Blue', 'Yellow', 'Red', 'Green'];
 
-  colors.forEach(color => {
-    const peerId = Object.keys(assignments).find(id => assignments[id] === color);
+  allColors.forEach(color => {
+    // Find the peer that has this color assigned
+    const peerId = Object.keys(assignments).find(id => {
+      const peerColors = assignments[id];
+      return Array.isArray(peerColors) ? peerColors.includes(color) : peerColors === color;
+    });
+
     if (peerId) {
       const li = document.createElement('li');
       const dot = document.createElement('span');
@@ -207,9 +216,12 @@ function updatePlayersList(assignments, listEl, localPeerId) {
       li.appendChild(name);
 
       if (peerId === localPeerId) {
+        const localColors = Array.isArray(assignments[localPeerId])
+          ? assignments[localPeerId]
+          : [assignments[localPeerId]];
         const youBadge = document.createElement('span');
         youBadge.className = 'player-you';
-        youBadge.textContent = 'You';
+        youBadge.textContent = localColors.length > 1 ? 'Local' : 'You';
         li.appendChild(youBadge);
       }
 
@@ -220,7 +232,8 @@ function updatePlayersList(assignments, listEl, localPeerId) {
 
 function updateHostWaitingRoom() {
   const assignments = networkManager.playerAssignments;
-  const playerCount = Object.keys(assignments).length;
+  // Count total assigned colors (not peers)
+  const playerCount = Object.values(assignments).flat().length;
   const neededPlayers = expectedPlayerCount;
 
   debug(`Updating host waiting room: ${playerCount}/${neededPlayers} players`, 'info');
@@ -276,8 +289,8 @@ function setupNetworkHandlers() {
   networkManager.onGameStart = (gameState, playerAssignments) => {
     debug('onGameStart received!', 'success');
     debug(`playerAssignments: ${JSON.stringify(playerAssignments)}`, 'info');
-    myColor = networkManager.getMyColor();
-    debug(`My color set to: ${myColor}`, 'info');
+    myColors = new Set(networkManager.getMyColors());
+    debug(`My colors set to: ${[...myColors].join(', ')}`, 'info');
     startGameWithState(gameState);
   };
 
@@ -316,25 +329,76 @@ backFromNewBtn.addEventListener('click', () => {
   showLobbySection('lobby-menu');
 });
 
+// Update local player count options when total player count changes
+function updateLocalPlayerOptions() {
+  if (!localPlayerCountSelect || !playerCountSelect) return;
+
+  const totalPlayers = Number(playerCountSelect.value);
+  const currentLocal = Number(localPlayerCountSelect.value);
+
+  // Update options in local player dropdown
+  localPlayerCountSelect.innerHTML = '';
+  for (let i = 1; i <= totalPlayers; i++) {
+    const option = document.createElement('option');
+    option.value = i;
+    option.textContent = `${i} Player${i > 1 ? 's' : ''}`;
+    localPlayerCountSelect.appendChild(option);
+  }
+
+  // Restore selection if valid, otherwise default to 1
+  localPlayerCountSelect.value = Math.min(currentLocal, totalPlayers);
+
+  // Update hint text
+  updateLocalHint();
+}
+
+function updateLocalHint() {
+  if (!localHintEl || !playerCountSelect || !localPlayerCountSelect) return;
+
+  const totalPlayers = Number(playerCountSelect.value);
+  const localPlayers = Number(localPlayerCountSelect.value);
+  const remotePlayers = totalPlayers - localPlayers;
+
+  if (remotePlayers === 0) {
+    localHintEl.textContent = 'All players on this device (local only game)';
+  } else if (remotePlayers === 1) {
+    localHintEl.textContent = '1 player can join remotely with a room code';
+  } else {
+    localHintEl.textContent = `${remotePlayers} players can join remotely with a room code`;
+  }
+}
+
+if (playerCountSelect) {
+  playerCountSelect.addEventListener('change', updateLocalPlayerOptions);
+}
+
+if (localPlayerCountSelect) {
+  localPlayerCountSelect.addEventListener('change', updateLocalHint);
+}
+
+// Initialize on page load
+updateLocalPlayerOptions();
+
 backFromJoinBtn.addEventListener('click', () => {
   showLobbySection('lobby-menu');
 });
 
 createGameBtn.addEventListener('click', async () => {
   expectedPlayerCount = Number(playerCountSelect.value);
-  debug(`Creating game for ${expectedPlayerCount} players...`, 'info');
+  localPlayerCount = Number(localPlayerCountSelect?.value ?? 1);
+  debug(`Creating game for ${expectedPlayerCount} players, ${localPlayerCount} local...`, 'info');
   showConnecting('Creating game...');
 
   try {
     setupNetworkHandlers();
     debug('Network handlers set up', 'info');
 
-    const result = await networkManager.createGame(expectedPlayerCount);
-    debug(`Game created! Room: ${result.roomCode}, Color: ${result.assignedColor}`, 'success');
+    const result = await networkManager.createGame(expectedPlayerCount, localPlayerCount);
+    debug(`Game created! Room: ${result.roomCode}, Colors: ${result.assignedColors.join(', ')}`, 'success');
     hideConnecting();
 
     roomCodeDisplay.textContent = result.roomCode;
-    myColor = result.assignedColor;
+    myColors = new Set(result.assignedColors);
     isMultiplayer = true;
 
     debug(`isHost after create: ${networkManager.isHost}`, 'info');
@@ -375,7 +439,7 @@ copyCodeBtn.addEventListener('click', async () => {
 cancelHostBtn.addEventListener('click', () => {
   networkManager.disconnect();
   isMultiplayer = false;
-  myColor = null;
+  myColors.clear();
   showLobbySection('lobby-menu');
 });
 
@@ -386,19 +450,22 @@ joinBtn.addEventListener('click', async () => {
     return;
   }
 
+  localPlayerCount = Number(joinLocalPlayerCountSelect?.value ?? 1);
   showConnecting('Joining game...');
 
   try {
     setupNetworkHandlers();
-    const result = await networkManager.joinGame(code);
+    const result = await networkManager.joinGame(code, localPlayerCount);
     hideConnecting();
 
-    myColor = result.assignedColor;
+    myColors = new Set(result.assignedColors);
     isMultiplayer = true;
     expectedPlayerCount = 4; // Will be updated when game starts
 
-    yourColorBadge.textContent = myColor;
-    yourColorBadge.dataset.color = myColor;
+    // Update UI to show assigned colors
+    const colorsList = result.assignedColors.join(', ');
+    yourColorBadge.textContent = colorsList;
+    yourColorBadge.dataset.color = result.assignedColors[0]; // Use first color for styling
     updateClientWaitingRoom();
     showLobbySection('client-waiting');
   } catch (err) {
@@ -410,7 +477,7 @@ joinBtn.addEventListener('click', async () => {
 leaveGameBtn.addEventListener('click', () => {
   networkManager.disconnect();
   isMultiplayer = false;
-  myColor = null;
+  myColors.clear();
   showLobbySection('lobby-menu');
 });
 
@@ -435,18 +502,16 @@ function handleStartGame() {
   }
 
   try {
-    // Initialize game state
-    const playerCount = Object.keys(networkManager.playerAssignments).length;
+    // Initialize game state - count colors, not peers
+    const allAssignedColors = Object.values(networkManager.playerAssignments).flat();
+    const playerCount = allAssignedColors.length;
     debug(`Starting game with ${playerCount} players`, 'success');
 
-    // Each connected player gets one color
-    // Use only the colors that have been assigned to connected players
-    const assignedColors = Object.values(networkManager.playerAssignments);
-    debug(`Assigned colors: ${assignedColors.join(', ')}`, 'info');
+    debug(`Assigned colors: ${allAssignedColors.join(', ')}`, 'info');
 
     // Sort colors to maintain Blue -> Yellow -> Red -> Green turn order
     const colorOrder = ['Blue', 'Yellow', 'Red', 'Green'];
-    const activeColors = colorOrder.filter(c => assignedColors.includes(c));
+    const activeColors = colorOrder.filter(c => allAssignedColors.includes(c));
     debug(`Active colors: ${activeColors.join(', ')}`, 'info');
 
     state = initialState();
@@ -498,7 +563,7 @@ leaveGameFooterBtn.addEventListener('click', () => {
 function leaveGame() {
   networkManager.disconnect();
   isMultiplayer = false;
-  myColor = null;
+  myColors.clear();
   gameScreen.hidden = true;
   lobbyScreen.hidden = false;
   showLobbySection('lobby-menu');
@@ -580,22 +645,22 @@ function applyNetworkState(networkState) {
 
 function handlePlayerAction(action, peerId) {
   // Host validates and processes actions
-  const playerColor = networkManager.playerAssignments[peerId];
+  const playerColors = networkManager.playerAssignments[peerId];
 
-  if (!playerColor) {
+  if (!playerColors || playerColors.length === 0) {
     networkManager.sendActionResult(peerId, false, null, 'Unknown player');
     return;
   }
 
   const currentColor = getCurrentColor();
-  if (playerColor !== currentColor) {
+  if (!playerColors.includes(currentColor)) {
     networkManager.sendActionResult(peerId, false, null, 'Not your turn');
     return;
   }
 
   if (action.type === 'place') {
     const placement = action.cells;
-    const validity = validatePlacement(playerColor, action.pieceId, placement);
+    const validity = validatePlacement(currentColor, action.pieceId, placement);
 
     if (!validity.valid) {
       networkManager.sendActionResult(peerId, false, null, validity.reason);
@@ -653,10 +718,15 @@ function startGameWithState(networkState) {
     }
 
     // Set up game UI
-    debug(`myColor: ${myColor}`, 'info');
+    const myColorsList = [...myColors];
+    debug(`myColors: ${myColorsList.join(', ')}`, 'info');
     if (yourColorIndicator) {
-      yourColorIndicator.textContent = `You: ${myColor}`;
-      yourColorIndicator.dataset.color = myColor;
+      if (myColorsList.length > 1) {
+        yourColorIndicator.textContent = `You: ${myColorsList.join(', ')}`;
+      } else {
+        yourColorIndicator.textContent = `You: ${myColorsList[0] || 'N/A'}`;
+      }
+      yourColorIndicator.dataset.color = myColorsList[0] || '';
     }
     if (roomCodeSmall) {
       roomCodeSmall.textContent = `Room: ${networkManager.roomCode}`;
@@ -780,7 +850,7 @@ function resetPreviewState() {
 
 function isMyTurn() {
   if (!isMultiplayer) return true;
-  return getCurrentColor() === myColor;
+  return myColors.has(getCurrentColor());
 }
 
 function getColorConfig(colorName) {
@@ -859,8 +929,12 @@ function updateTurnIndicator() {
   let text = color ?? '—';
 
   if (isMultiplayer && color) {
-    if (color === myColor) {
-      text = `${color} (Your Turn)`;
+    if (myColors.has(color)) {
+      if (myColors.size > 1) {
+        text = `${color} (Your Turn - Local Player)`;
+      } else {
+        text = `${color} (Your Turn)`;
+      }
     } else {
       text = `${color} (Waiting...)`;
     }
@@ -1513,8 +1587,9 @@ function renderScores() {
     const row = document.createElement('tr');
     const colorCell = document.createElement('td');
     colorCell.textContent = color;
-    if (isMultiplayer && color === myColor) {
-      colorCell.innerHTML = `${color} <span style="font-size:0.75rem;color:var(--muted)">(You)</span>`;
+    if (isMultiplayer && myColors.has(color)) {
+      const label = myColors.size > 1 ? '(Local)' : '(You)';
+      colorCell.innerHTML = `${color} <span style="font-size:0.75rem;color:var(--muted)">${label}</span>`;
     }
     const remainingCell = document.createElement('td');
     remainingCell.textContent = remainingSquares.toString();

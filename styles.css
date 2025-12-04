@@ -151,6 +151,23 @@
   font-family: monospace;
 }
 
+.hint-text {
+  font-size: 0.85rem;
+  color: var(--muted);
+  margin: 0.5rem 0 0;
+  text-align: center;
+}
+
+.control-row {
+  margin-top: 1rem;
+}
+
+.control-row label {
+  display: block;
+  margin-bottom: 0.5rem;
+  font-weight: 600;
+}
+
 .room-code-display {
   text-align: center;
   margin-bottom: 1.5rem;
