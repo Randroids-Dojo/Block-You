@@ -22,7 +22,7 @@ class NetworkManager {
     this.isHost = false;
     this.roomCode = null;
     this.localPlayerId = null;
-    this.playerAssignments = {}; // peerId -> color
+    this.playerAssignments = {}; // peerId -> array of colors (supports multiple local players)
     this.onStateUpdate = null;
     this.onPlayerJoin = null;
     this.onPlayerLeave = null;
@@ -45,7 +45,7 @@ class NetworkManager {
   }
 
   // Initialize as host (New Game)
-  async createGame(playerCount) {
+  async createGame(playerCount, localPlayerCount = 1) {
     await this.loadPeerJS();
 
     this.isHost = true;
@@ -59,8 +59,12 @@ class NetworkManager {
         this.localPlayerId = id;
         console.log('Host peer opened with ID:', id);
 
-        // Host is always Blue (first player)
-        this.playerAssignments[id] = 'Blue';
+        // Assign colors to local players on host device
+        const colors = ['Blue', 'Yellow', 'Red', 'Green'];
+        const assignedColors = colors.slice(0, localPlayerCount);
+        this.playerAssignments[id] = assignedColors;
+
+        console.log(`Host assigned ${localPlayerCount} local players: ${assignedColors.join(', ')}`);
 
         // Listen for incoming connections
         this.peer.on('connection', (conn) => this.handleIncomingConnection(conn));
@@ -68,7 +72,7 @@ class NetworkManager {
         resolve({
           roomCode: this.roomCode,
           peerId: id,
-          assignedColor: 'Blue'
+          assignedColors: assignedColors
         });
       });
 
@@ -78,7 +82,7 @@ class NetworkManager {
           // Room code collision, try again
           this.roomCode = generateRoomCode();
           this.peer.destroy();
-          this.createGame(playerCount).then(resolve).catch(reject);
+          this.createGame(playerCount, localPlayerCount).then(resolve).catch(reject);
         } else {
           reject(err);
         }
@@ -87,7 +91,7 @@ class NetworkManager {
   }
 
   // Initialize as client (Join Game)
-  async joinGame(roomCode) {
+  async joinGame(roomCode, localPlayerCount = 1) {
     await this.loadPeerJS();
 
     this.isHost = false;
@@ -114,10 +118,11 @@ class NetworkManager {
           this.connections.set(hostPeerId, conn);
           this.setupConnectionHandlers(conn);
 
-          // Send join request
+          // Send join request with local player count
           conn.send({
             type: 'join-request',
-            peerId: id
+            peerId: id,
+            localPlayerCount: localPlayerCount
           });
         });
 
@@ -189,21 +194,21 @@ class NetworkManager {
         break;
 
       case 'join-accepted':
-        // Client received color assignment
+        // Client received color assignment (can be multiple colors for local multiplayer)
         this.playerAssignments = data.playerAssignments;
-        const myColor = this.playerAssignments[this.localPlayerId];
+        const myColors = this.playerAssignments[this.localPlayerId] || [];
         if (this.pendingJoinResolve) {
           this.pendingJoinResolve({
             roomCode: this.roomCode,
             peerId: this.localPlayerId,
-            assignedColor: myColor,
+            assignedColors: myColors,
             playerAssignments: data.playerAssignments
           });
           this.pendingJoinResolve = null;
           this.pendingJoinReject = null;
         }
         if (this.onConnectionReady) {
-          this.onConnectionReady(myColor);
+          this.onConnectionReady(myColors);
         }
         break;
 
@@ -255,12 +260,17 @@ class NetworkManager {
   }
 
   handleJoinRequest(conn, data) {
-    // Assign color to new player
-    const colors = ['Blue', 'Yellow', 'Red', 'Green'];
-    const usedColors = Object.values(this.playerAssignments);
-    const availableColor = colors.find(c => !usedColors.includes(c));
+    // Get requested local player count (default to 1 for backwards compatibility)
+    const requestedLocalPlayers = data.localPlayerCount || 1;
 
-    if (!availableColor) {
+    // Assign colors to new player(s)
+    const colors = ['Blue', 'Yellow', 'Red', 'Green'];
+
+    // Get all colors already used (flatten the arrays)
+    const usedColors = Object.values(this.playerAssignments).flat();
+    const availableColors = colors.filter(c => !usedColors.includes(c));
+
+    if (availableColors.length === 0) {
       conn.send({
         type: 'join-rejected',
         reason: 'Game is full'
@@ -268,12 +278,30 @@ class NetworkManager {
       return;
     }
 
-    this.playerAssignments[conn.peer] = availableColor;
+    // Assign as many colors as requested and available
+    const colorsToAssign = availableColors.slice(0, requestedLocalPlayers);
+
+    if (colorsToAssign.length < requestedLocalPlayers) {
+      // Not enough slots for all requested local players
+      if (colorsToAssign.length === 0) {
+        conn.send({
+          type: 'join-rejected',
+          reason: 'Game is full'
+        });
+        return;
+      }
+      // Partial assignment - assign what's available
+      console.log(`Only ${colorsToAssign.length} of ${requestedLocalPlayers} requested slots available`);
+    }
+
+    this.playerAssignments[conn.peer] = colorsToAssign;
+
+    console.log(`Assigned ${colorsToAssign.length} colors to ${conn.peer}: ${colorsToAssign.join(', ')}`);
 
     // Send acceptance with color assignment
     conn.send({
       type: 'join-accepted',
-      assignedColor: availableColor,
+      assignedColors: colorsToAssign,
       playerAssignments: this.playerAssignments
     });
 
@@ -281,7 +309,7 @@ class NetworkManager {
     this.broadcastPlayerAssignments();
 
     if (this.onPlayerJoin) {
-      this.onPlayerJoin(conn.peer, availableColor);
+      this.onPlayerJoin(conn.peer, colorsToAssign);
     }
   }
 
@@ -377,15 +405,32 @@ class NetworkManager {
   }
 
   getConnectedPlayerCount() {
-    return Object.keys(this.playerAssignments).length;
+    // Count total colors assigned (not peers, since each peer can have multiple colors)
+    return Object.values(this.playerAssignments).flat().length;
   }
 
+  getMyColors() {
+    return this.playerAssignments[this.localPlayerId] || [];
+  }
+
+  // Legacy method for backwards compatibility
   getMyColor() {
-    return this.playerAssignments[this.localPlayerId];
+    const colors = this.getMyColors();
+    return colors[0] || null;
   }
 
   isMyTurn(currentColor) {
-    return this.getMyColor() === currentColor;
+    return this.getMyColors().includes(currentColor);
+  }
+
+  // Get the peer ID that owns a specific color
+  getPeerForColor(color) {
+    for (const [peerId, colors] of Object.entries(this.playerAssignments)) {
+      if (colors.includes(color)) {
+        return peerId;
+      }
+    }
+    return null;
   }
 
   disconnect() {

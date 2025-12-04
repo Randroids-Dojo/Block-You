@@ -43,13 +43,23 @@
           <h2>Create New Game</h2>
           <div class="lobby-form">
             <div class="control-row">
-              <label for="player-count">Number of Players</label>
+              <label for="player-count">Total Players</label>
               <select id="player-count">
                 <option value="4">4 Players</option>
                 <option value="3">3 Players</option>
                 <option value="2">2 Players</option>
               </select>
             </div>
+            <div class="control-row">
+              <label for="local-player-count">Local Players (this device)</label>
+              <select id="local-player-count">
+                <option value="1">1 Player</option>
+                <option value="2">2 Players</option>
+                <option value="3">3 Players</option>
+                <option value="4">4 Players</option>
+              </select>
+            </div>
+            <p class="hint-text" id="local-hint">Other players can join remotely with a room code</p>
           </div>
           <button id="create-game-btn" class="lobby-btn primary">Create Game</button>
           <button id="back-from-new" class="lobby-btn secondary">Back</button>
@@ -78,6 +88,14 @@
           <div class="lobby-form">
             <label for="room-code-input">Enter Room Code</label>
             <input type="text" id="room-code-input" class="room-code-input" placeholder="XXXXXX" maxlength="6" autocomplete="off" autocapitalize="characters">
+            <div class="control-row">
+              <label for="join-local-player-count">Local Players (this device)</label>
+              <select id="join-local-player-count">
+                <option value="1">1 Player</option>
+                <option value="2">2 Players</option>
+                <option value="3">3 Players</option>
+              </select>
+            </div>
           </div>
           <button id="join-btn" class="lobby-btn primary">Join</button>
           <button id="back-from-join" class="lobby-btn secondary">Back</button>
