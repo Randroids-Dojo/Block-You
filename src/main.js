@@ -316,6 +316,35 @@ function setupNetworkHandlers() {
       updateStatus(reason || 'Action failed.');
     }
   };
+
+  networkManager.onHostDisconnect = () => {
+    debug('Host disconnected, migrating...', 'error');
+    updateStatus('Host disconnected. Migrating to new host...');
+  };
+
+  networkManager.onBecomeHost = (gameState) => {
+    debug('This device is now the host!', 'success');
+    updateStatus('You are now the host!');
+    // If game was in progress, continue as host
+    if (networkManager.gameInProgress && gameState) {
+      debug('Continuing game as new host', 'info');
+      applyNetworkState(gameState);
+    }
+  };
+
+  networkManager.onHostReclaimed = (gameState, playerAssignments) => {
+    debug('Original host has reclaimed hosting!', 'success');
+    updateStatus('You have reclaimed host duties!');
+    myColors = new Set(networkManager.getMyColors());
+    debug(`My colors set to: ${[...myColors].join(', ')}`, 'info');
+    if (gameState) {
+      applyNetworkState(gameState);
+    }
+    // Update the waiting room if game hasn't started
+    if (!networkManager.gameInProgress) {
+      updateHostWaitingRoom();
+    }
+  };
 }
 
 // ========== Lobby Event Listeners ==========
