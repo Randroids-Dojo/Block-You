@@ -331,6 +331,20 @@ function setupNetworkHandlers() {
       applyNetworkState(gameState);
     }
   };
+
+  networkManager.onHostReclaimed = (gameState, playerAssignments) => {
+    debug('Original host has reclaimed hosting!', 'success');
+    updateStatus('You have reclaimed host duties!');
+    myColors = new Set(networkManager.getMyColors());
+    debug(`My colors set to: ${[...myColors].join(', ')}`, 'info');
+    if (gameState) {
+      applyNetworkState(gameState);
+    }
+    // Update the waiting room if game hasn't started
+    if (!networkManager.gameInProgress) {
+      updateHostWaitingRoom();
+    }
+  };
 }
 
 // ========== Lobby Event Listeners ==========

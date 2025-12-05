@@ -23,6 +23,7 @@ class NetworkManager {
     this.roomCode = null;
     this.localPlayerId = null;
     this.hostPeerId = null; // Track current host's peer ID
+    this.originalHostPeerId = null; // Track the original host's peer ID for reclaim
     this.playerAssignments = {}; // peerId -> array of colors (supports multiple local players)
     this.gameInProgress = false; // Track if game has started
     this.lastKnownGameState = null; // For host migration
@@ -34,6 +35,7 @@ class NetworkManager {
     this.onGameStart = null;
     this.onBecomeHost = null; // Called when this peer becomes the new host
     this.onHostDisconnect = null; // Called when host disconnects (before migration)
+    this.onHostReclaimed = null; // Called when original host reclaims hosting
   }
 
   // Load PeerJS library dynamically
@@ -63,6 +65,7 @@ class NetworkManager {
       this.peer.on('open', (id) => {
         this.localPlayerId = id;
         this.hostPeerId = id; // Host is itself
+        this.originalHostPeerId = id; // Track original host for potential reclaim
         console.log('Host peer opened with ID:', id);
 
         // Assign colors to local players on host device
@@ -104,6 +107,7 @@ class NetworkManager {
     this.roomCode = roomCode.toUpperCase();
     const hostPeerId = `blockyou-${this.roomCode}`;
     this.hostPeerId = hostPeerId;
+    this.originalHostPeerId = hostPeerId; // Track original host for potential reclaim
 
     return new Promise((resolve, reject) => {
       // Generate a unique peer ID for this client
@@ -160,6 +164,78 @@ class NetworkManager {
           this.pendingJoinReject = null;
         }
       }, 15000);
+    });
+  }
+
+  // Original host rejoins and reclaims hosting duties
+  async rejoinAsHost(roomCode, localPlayerCount = 1) {
+    await this.loadPeerJS();
+
+    this.roomCode = roomCode.toUpperCase();
+    const originalHostId = `blockyou-${this.roomCode}`;
+    this.originalHostPeerId = originalHostId;
+
+    return new Promise((resolve, reject) => {
+      // Try to reclaim the original host peer ID
+      this.peer = new window.Peer(originalHostId, PEER_CONFIG);
+
+      this.peer.on('open', (id) => {
+        this.localPlayerId = id;
+        console.log('Original host rejoining with ID:', id);
+
+        // We got our original ID back, now we need to find the current host
+        // The current host will be one of the clients (has the room code prefix but with suffix)
+        // We'll listen for connections and also try to connect to any known peers
+
+        this.isHost = true;
+        this.hostPeerId = id;
+
+        // Listen for incoming connections from current players
+        this.peer.on('connection', (conn) => {
+          console.log('Incoming connection while rejoining:', conn.peer);
+          this.handleIncomingConnection(conn);
+
+          // Once connected, request the current game state
+          conn.on('open', () => {
+            conn.send({
+              type: 'host-reclaim',
+              originalHostPeerId: id,
+              localPlayerCount: localPlayerCount
+            });
+          });
+        });
+
+        // Assign colors to local players
+        const colors = ['Blue', 'Yellow', 'Red', 'Green'];
+        const assignedColors = colors.slice(0, localPlayerCount);
+        this.playerAssignments[id] = assignedColors;
+
+        resolve({
+          roomCode: this.roomCode,
+          peerId: id,
+          assignedColors: assignedColors,
+          isReclaim: true
+        });
+      });
+
+      this.peer.on('error', (err) => {
+        console.error('Peer error during rejoin:', err);
+        if (err.type === 'unavailable-id') {
+          // Original ID is still in use or unavailable, try as regular client
+          console.log('Original host ID unavailable, falling back to regular join');
+          this.peer.destroy();
+          this.joinGame(roomCode, localPlayerCount).then(resolve).catch(reject);
+        } else {
+          reject(err);
+        }
+      });
+
+      // Timeout for rejoin
+      setTimeout(() => {
+        if (!this.gameInProgress && Object.keys(this.playerAssignments).length <= 1) {
+          console.log('No other players found, game may have ended');
+        }
+      }, 10000);
     });
   }
 
@@ -284,6 +360,103 @@ class NetworkManager {
     if (this.onBecomeHost) {
       this.onBecomeHost(this.lastKnownGameState);
     }
+
+    // Start checking if the original host comes back online
+    this.startOriginalHostCheck();
+  }
+
+  // Periodically check if original host has come back online
+  startOriginalHostCheck() {
+    if (this.originalHostCheckInterval) {
+      clearInterval(this.originalHostCheckInterval);
+    }
+
+    // Only check if we're not the original host
+    if (this.localPlayerId === this.originalHostPeerId) {
+      return;
+    }
+
+    console.log('Starting periodic check for original host:', this.originalHostPeerId);
+
+    this.originalHostCheckInterval = setInterval(() => {
+      if (!this.isHost || this.localPlayerId === this.originalHostPeerId) {
+        // We're no longer host or we are the original host, stop checking
+        clearInterval(this.originalHostCheckInterval);
+        this.originalHostCheckInterval = null;
+        return;
+      }
+
+      // Try to connect to original host
+      console.log('Checking if original host is back online...');
+      const conn = this.peer.connect(this.originalHostPeerId, {
+        reliable: true,
+        serialization: 'json'
+      });
+
+      const timeout = setTimeout(() => {
+        conn.close();
+      }, 5000);
+
+      conn.on('open', () => {
+        clearTimeout(timeout);
+        console.log('Original host is back online!');
+        this.connections.set(this.originalHostPeerId, conn);
+        this.setupConnectionHandlers(conn);
+
+        // Stop checking
+        clearInterval(this.originalHostCheckInterval);
+        this.originalHostCheckInterval = null;
+      });
+
+      conn.on('error', () => {
+        clearTimeout(timeout);
+        // Original host not available yet, will try again
+      });
+    }, 10000); // Check every 10 seconds
+  }
+
+  // Handle original host reclaiming their position
+  handleHostReclaim(conn, data) {
+    console.log('Transferring host duties back to original host');
+
+    // Update player assignments to include original host's colors
+    const colors = ['Blue', 'Yellow', 'Red', 'Green'];
+    const usedColors = Object.values(this.playerAssignments).flat();
+    const availableColors = colors.filter(c => !usedColors.includes(c));
+    const colorsToAssign = availableColors.slice(0, data.localPlayerCount || 1);
+
+    // Assign colors to the returning original host
+    this.playerAssignments[conn.peer] = colorsToAssign;
+
+    // Send acknowledgment with current game state
+    conn.send({
+      type: 'host-reclaim-ack',
+      playerAssignments: this.playerAssignments,
+      gameState: this.lastKnownGameState,
+      gameInProgress: this.gameInProgress
+    });
+
+    // We're no longer the host
+    this.isHost = false;
+    this.hostPeerId = conn.peer;
+
+    console.log('Host duties transferred to:', conn.peer);
+  }
+
+  // Broadcast to all clients that original host has reclaimed
+  broadcastHostReclaimed() {
+    const message = {
+      type: 'host-reclaimed',
+      originalHostPeerId: this.localPlayerId,
+      playerAssignments: this.playerAssignments,
+      gameState: this.lastKnownGameState
+    };
+
+    this.connections.forEach((conn) => {
+      if (conn.open) {
+        conn.send(message);
+      }
+    });
   }
 
   handleMessage(conn, data) {
@@ -375,6 +548,41 @@ class NetworkManager {
           this.onPlayerAssignmentsUpdate(data.playerAssignments);
         }
         console.log('Host migration complete, connected to new host');
+        break;
+
+      case 'host-reclaim':
+        // Original host is reclaiming - only respond if we're currently host
+        if (this.isHost && conn.peer === this.originalHostPeerId) {
+          console.log('Original host is reclaiming hosting duties');
+          this.handleHostReclaim(conn, data);
+        }
+        break;
+
+      case 'host-reclaim-ack':
+        // We're the original host and received acknowledgment with game state
+        console.log('Received host reclaim acknowledgment');
+        this.playerAssignments = data.playerAssignments;
+        this.lastKnownGameState = data.gameState;
+        this.gameInProgress = data.gameInProgress;
+        // Broadcast to all connected clients that we're the host again
+        this.broadcastHostReclaimed();
+        if (this.onHostReclaimed) {
+          this.onHostReclaimed(data.gameState, data.playerAssignments);
+        }
+        break;
+
+      case 'host-reclaimed':
+        // Original host has reclaimed, update our records
+        console.log('Original host has reclaimed hosting');
+        this.hostPeerId = data.originalHostPeerId;
+        this.playerAssignments = data.playerAssignments;
+        if (data.gameState) {
+          this.lastKnownGameState = data.gameState;
+        }
+        this.connections.set(data.originalHostPeerId, conn);
+        if (this.onPlayerAssignmentsUpdate) {
+          this.onPlayerAssignmentsUpdate(data.playerAssignments);
+        }
         break;
 
       default:
@@ -563,6 +771,10 @@ class NetworkManager {
   }
 
   disconnect() {
+    if (this.originalHostCheckInterval) {
+      clearInterval(this.originalHostCheckInterval);
+      this.originalHostCheckInterval = null;
+    }
     this.connections.forEach((conn) => conn.close());
     this.connections.clear();
     if (this.peer) {
@@ -573,6 +785,7 @@ class NetworkManager {
     this.roomCode = null;
     this.localPlayerId = null;
     this.hostPeerId = null;
+    this.originalHostPeerId = null;
     this.playerAssignments = {};
     this.gameInProgress = false;
     this.lastKnownGameState = null;
