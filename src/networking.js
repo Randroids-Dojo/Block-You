@@ -5,6 +5,8 @@ const PEER_CONFIG = {
   debug: 0, // Set to 2 for more verbose logging
 };
 
+const SESSION_STORAGE_KEY = 'blockyou-session';
+
 // Generate a random room code
 export function generateRoomCode() {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // Removed confusing chars like O, 0, I, 1
@@ -13,6 +15,45 @@ export function generateRoomCode() {
     code += chars.charAt(Math.floor(Math.random() * chars.length));
   }
   return code;
+}
+
+// Session persistence for rejoining after disconnect
+function saveSession(roomCode, hostPeerId, knownPeers) {
+  try {
+    const session = {
+      roomCode,
+      hostPeerId,
+      knownPeers: knownPeers || [],
+      timestamp: Date.now()
+    };
+    localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(session));
+  } catch (e) {
+    console.warn('Failed to save session:', e);
+  }
+}
+
+function loadSession(roomCode) {
+  try {
+    const data = localStorage.getItem(SESSION_STORAGE_KEY);
+    if (!data) return null;
+    const session = JSON.parse(data);
+    // Only return if it's for the same room and not too old (1 hour)
+    if (session.roomCode === roomCode && Date.now() - session.timestamp < 3600000) {
+      return session;
+    }
+    return null;
+  } catch (e) {
+    console.warn('Failed to load session:', e);
+    return null;
+  }
+}
+
+function clearSession() {
+  try {
+    localStorage.removeItem(SESSION_STORAGE_KEY);
+  } catch (e) {
+    console.warn('Failed to clear session:', e);
+  }
 }
 
 class NetworkManager {
@@ -78,6 +119,9 @@ class NetworkManager {
         // Listen for incoming connections
         this.peer.on('connection', (conn) => this.handleIncomingConnection(conn));
 
+        // Save session info for potential rejoin
+        this.updateSessionInfo();
+
         resolve({
           roomCode: this.roomCode,
           peerId: id,
@@ -105,9 +149,12 @@ class NetworkManager {
 
     this.isHost = false;
     this.roomCode = roomCode.toUpperCase();
-    const hostPeerId = `blockyou-${this.roomCode}`;
-    this.hostPeerId = hostPeerId;
-    this.originalHostPeerId = hostPeerId; // Track original host for potential reclaim
+    const originalHostPeerId = `blockyou-${this.roomCode}`;
+    this.originalHostPeerId = originalHostPeerId;
+
+    // Load previous session to get known peers for fallback
+    const previousSession = loadSession(this.roomCode);
+    const fallbackHosts = previousSession ? previousSession.knownPeers.filter(p => p !== originalHostPeerId) : [];
 
     return new Promise((resolve, reject) => {
       // Generate a unique peer ID for this client
@@ -118,35 +165,21 @@ class NetworkManager {
         this.localPlayerId = id;
         console.log('Client peer opened with ID:', id);
 
-        // Connect to host
-        const conn = this.peer.connect(hostPeerId, {
-          reliable: true,
-          serialization: 'json'
-        });
-
-        conn.on('open', () => {
-          console.log('Connected to host');
-          this.connections.set(hostPeerId, conn);
-          this.setupConnectionHandlers(conn);
-
-          // Send join request with local player count
-          conn.send({
-            type: 'join-request',
-            peerId: id,
-            localPlayerCount: localPlayerCount
-          });
-        });
-
-        conn.on('error', (err) => {
-          console.error('Connection error:', err);
-          reject(new Error('Failed to connect to game'));
-        });
+        // Try to connect to original host first, then fallbacks
+        this.tryConnectToHosts([originalHostPeerId, ...fallbackHosts], localPlayerCount, resolve, reject);
       });
 
       this.peer.on('error', (err) => {
         console.error('Peer error:', err);
         if (err.type === 'peer-unavailable') {
-          reject(new Error('Game not found. Check the room code.'));
+          // Try fallback hosts if available
+          if (fallbackHosts.length > 0 && !this.triedFallbacks) {
+            console.log('Original host unavailable, trying fallback hosts...');
+            this.triedFallbacks = true;
+            this.tryConnectToHosts(fallbackHosts, localPlayerCount, resolve, reject);
+          } else {
+            reject(new Error('Game not found. The host may have left.'));
+          }
         } else {
           reject(err);
         }
@@ -159,12 +192,64 @@ class NetworkManager {
       // Timeout for connection
       setTimeout(() => {
         if (this.pendingJoinResolve) {
-          reject(new Error('Connection timed out'));
+          reject(new Error('Connection timed out. No available host found.'));
           this.pendingJoinResolve = null;
           this.pendingJoinReject = null;
         }
-      }, 15000);
+      }, 20000); // Increased timeout for fallback attempts
     });
+  }
+
+  // Try connecting to a list of potential hosts in order
+  tryConnectToHosts(hostList, localPlayerCount, resolve, reject) {
+    if (hostList.length === 0) {
+      reject(new Error('No hosts available to connect to.'));
+      return;
+    }
+
+    const tryNext = (index) => {
+      if (index >= hostList.length) {
+        reject(new Error('Could not connect to any host. Game may have ended.'));
+        return;
+      }
+
+      const hostPeerId = hostList[index];
+      console.log(`Trying to connect to host: ${hostPeerId} (${index + 1}/${hostList.length})`);
+
+      const conn = this.peer.connect(hostPeerId, {
+        reliable: true,
+        serialization: 'json'
+      });
+
+      const connectionTimeout = setTimeout(() => {
+        console.log(`Connection to ${hostPeerId} timed out, trying next...`);
+        conn.close();
+        tryNext(index + 1);
+      }, 5000);
+
+      conn.on('open', () => {
+        clearTimeout(connectionTimeout);
+        console.log('Connected to host:', hostPeerId);
+        this.hostPeerId = hostPeerId;
+        this.connections.set(hostPeerId, conn);
+        this.setupConnectionHandlers(conn);
+
+        // Send join request with local player count
+        conn.send({
+          type: 'join-request',
+          peerId: this.localPlayerId,
+          localPlayerCount: localPlayerCount
+        });
+      });
+
+      conn.on('error', (err) => {
+        clearTimeout(connectionTimeout);
+        console.log(`Failed to connect to ${hostPeerId}:`, err.message);
+        tryNext(index + 1);
+      });
+    };
+
+    tryNext(0);
   }
 
   // Original host rejoins and reclaims hosting duties
@@ -473,6 +558,8 @@ class NetworkManager {
         // Client received color assignment (can be multiple colors for local multiplayer)
         this.playerAssignments = data.playerAssignments;
         const myColors = this.playerAssignments[this.localPlayerId] || [];
+        // Save session for potential rejoin
+        this.updateSessionInfo();
         if (this.pendingJoinResolve) {
           this.pendingJoinResolve({
             roomCode: this.roomCode,
@@ -528,6 +615,35 @@ class NetworkManager {
 
       case 'player-assignments-update':
         this.playerAssignments = data.playerAssignments;
+        // Update session with current peer list
+        this.updateSessionInfo();
+        if (this.onPlayerAssignmentsUpdate) {
+          this.onPlayerAssignmentsUpdate(data.playerAssignments);
+        }
+        break;
+
+      case 'request-state':
+        // Client is requesting current state (for resync after reconnection)
+        if (this.isHost) {
+          conn.send({
+            type: 'state-resync',
+            playerAssignments: this.playerAssignments,
+            gameState: this.lastKnownGameState,
+            gameInProgress: this.gameInProgress
+          });
+        }
+        break;
+
+      case 'state-resync':
+        // Received state resync from host
+        console.log('Received state resync from host');
+        this.playerAssignments = data.playerAssignments;
+        this.lastKnownGameState = data.gameState;
+        this.gameInProgress = data.gameInProgress;
+        this.updateSessionInfo();
+        if (this.onStateUpdate && data.gameState) {
+          this.onStateUpdate(data.gameState);
+        }
         if (this.onPlayerAssignmentsUpdate) {
           this.onPlayerAssignmentsUpdate(data.playerAssignments);
         }
@@ -544,6 +660,8 @@ class NetworkManager {
         this.gameInProgress = data.gameInProgress;
         // Update the connection map to use the new host's connection
         this.connections.set(data.newHostPeerId, conn);
+        // Update session with new host info
+        this.updateSessionInfo();
         if (this.onPlayerAssignmentsUpdate) {
           this.onPlayerAssignmentsUpdate(data.playerAssignments);
         }
@@ -580,6 +698,8 @@ class NetworkManager {
           this.lastKnownGameState = data.gameState;
         }
         this.connections.set(data.originalHostPeerId, conn);
+        // Update session with original host back
+        this.updateSessionInfo();
         if (this.onPlayerAssignmentsUpdate) {
           this.onPlayerAssignmentsUpdate(data.playerAssignments);
         }
@@ -741,6 +861,28 @@ class NetworkManager {
     }
   }
 
+  // Update session info in localStorage for rejoining
+  updateSessionInfo() {
+    const knownPeers = Object.keys(this.playerAssignments);
+    saveSession(this.roomCode, this.hostPeerId, knownPeers);
+  }
+
+  // Request state resync from host (useful after reconnection)
+  requestStateResync() {
+    if (this.isHost) {
+      // We are the host, no need to request
+      return;
+    }
+
+    const conn = this.connections.get(this.hostPeerId);
+    if (conn && conn.open) {
+      console.log('Requesting state resync from host');
+      conn.send({ type: 'request-state' });
+    } else {
+      console.warn('Cannot request state resync: not connected to host');
+    }
+  }
+
   getConnectedPlayerCount() {
     // Count total colors assigned (not peers, since each peer can have multiple colors)
     return Object.values(this.playerAssignments).flat().length;
@@ -781,6 +923,8 @@ class NetworkManager {
       this.peer.destroy();
       this.peer = null;
     }
+    // Clear session data
+    clearSession();
     this.isHost = false;
     this.roomCode = null;
     this.localPlayerId = null;
@@ -789,6 +933,7 @@ class NetworkManager {
     this.playerAssignments = {};
     this.gameInProgress = false;
     this.lastKnownGameState = null;
+    this.triedFallbacks = false;
   }
 }
 
