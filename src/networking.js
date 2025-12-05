@@ -177,8 +177,17 @@ class NetworkManager {
       this.connections.delete(conn.peer);
 
       if (this.onPlayerLeave) {
-        const color = this.playerAssignments[conn.peer];
-        this.onPlayerLeave(conn.peer, color);
+        const colors = this.playerAssignments[conn.peer];
+        this.onPlayerLeave(conn.peer, colors);
+      }
+
+      // Remove the player's color assignments so new players can join
+      if (this.playerAssignments[conn.peer]) {
+        delete this.playerAssignments[conn.peer];
+        // Broadcast updated assignments so other clients know slots are available
+        if (this.isHost) {
+          this.broadcastPlayerAssignments();
+        }
       }
     });
   }
