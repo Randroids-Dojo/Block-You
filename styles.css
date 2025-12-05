@@ -320,6 +320,36 @@
   font-weight: 500;
 }
 
+/* Host Reclaim Prompt */
+#host-reclaim-prompt {
+  background: rgba(33, 150, 243, 0.1);
+  border-color: var(--primary);
+}
+
+#host-reclaim-prompt h3 {
+  color: var(--primary);
+  margin: 0 0 0.5rem;
+  font-size: 1.1rem;
+}
+
+#host-reclaim-prompt p {
+  color: var(--text);
+  margin: 0 0 1rem;
+}
+
+.button-row {
+  display: flex;
+  gap: 0.75rem;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+.button-row .lobby-btn {
+  flex: 1;
+  min-width: 120px;
+  max-width: 200px;
+}
+
 /* Debug Panel */
 .debug-panel {
   margin-top: 1.5rem;

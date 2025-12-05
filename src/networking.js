@@ -77,6 +77,7 @@ class NetworkManager {
     this.onBecomeHost = null; // Called when this peer becomes the new host
     this.onHostDisconnect = null; // Called when host disconnects (before migration)
     this.onHostReclaimed = null; // Called when original host reclaims hosting
+    this.onRemotePlayerLeave = null; // Called when we receive notification that a remote player left
   }
 
   // Load PeerJS library dynamically
@@ -141,6 +142,52 @@ class NetworkManager {
         }
       });
     });
+  }
+
+  // Check if host reclaim is possible for a given room code
+  async checkHostReclaimAvailable(roomCode) {
+    await this.loadPeerJS();
+
+    const normalizedCode = roomCode.toUpperCase();
+    const originalHostId = `blockyou-${normalizedCode}`;
+
+    return new Promise((resolve) => {
+      // Try to create a peer with the original host ID
+      const testPeer = new window.Peer(originalHostId, { ...PEER_CONFIG, debug: 0 });
+
+      const timeout = setTimeout(() => {
+        testPeer.destroy();
+        resolve(false);
+      }, 5000);
+
+      testPeer.on('open', () => {
+        clearTimeout(timeout);
+        // Successfully created peer with original host ID - reclaim is available
+        // Store the peer for later use
+        this.pendingReclaimPeer = testPeer;
+        resolve(true);
+      });
+
+      testPeer.on('error', (err) => {
+        clearTimeout(timeout);
+        testPeer.destroy();
+        if (err.type === 'unavailable-id') {
+          // Original host ID is taken - either by actual host or another session
+          resolve(false);
+        } else {
+          // Other error - assume not available
+          resolve(false);
+        }
+      });
+    });
+  }
+
+  // Cancel a pending host reclaim check (cleanup the test peer)
+  cancelHostReclaimCheck() {
+    if (this.pendingReclaimPeer) {
+      this.pendingReclaimPeer.destroy();
+      this.pendingReclaimPeer = null;
+    }
   }
 
   // Initialize as client (Join Game)
@@ -261,10 +308,17 @@ class NetworkManager {
     this.originalHostPeerId = originalHostId;
 
     return new Promise((resolve, reject) => {
-      // Try to reclaim the original host peer ID
-      this.peer = new window.Peer(originalHostId, PEER_CONFIG);
+      // Use pending reclaim peer if available (from checkHostReclaimAvailable)
+      const usePendingPeer = this.pendingReclaimPeer && this.pendingReclaimPeer.id === originalHostId;
+      if (usePendingPeer) {
+        this.peer = this.pendingReclaimPeer;
+        this.pendingReclaimPeer = null;
+      } else {
+        // Try to reclaim the original host peer ID
+        this.peer = new window.Peer(originalHostId, PEER_CONFIG);
+      }
 
-      this.peer.on('open', (id) => {
+      const setupHost = (id) => {
         this.localPlayerId = id;
         console.log('Original host rejoining with ID:', id);
 
@@ -301,7 +355,15 @@ class NetworkManager {
           assignedColors: assignedColors,
           isReclaim: true
         });
-      });
+      };
+
+      // If peer is already open (from pending reclaim), call setup directly
+      if (usePendingPeer && this.peer.open) {
+        setupHost(this.peer.id);
+        return;
+      }
+
+      this.peer.on('open', setupHost);
 
       this.peer.on('error', (err) => {
         console.error('Peer error during rejoin:', err);
@@ -345,17 +407,18 @@ class NetworkManager {
       this.connections.delete(conn.peer);
 
       const wasHost = conn.peer === this.hostPeerId;
+      const leftPlayerColors = this.playerAssignments[conn.peer];
 
       if (this.onPlayerLeave) {
-        const colors = this.playerAssignments[conn.peer];
-        this.onPlayerLeave(conn.peer, colors);
+        this.onPlayerLeave(conn.peer, leftPlayerColors);
       }
 
       // Remove the player's color assignments so new players can join
       if (this.playerAssignments[conn.peer]) {
         delete this.playerAssignments[conn.peer];
-        // Broadcast updated assignments so other clients know slots are available
+        // Broadcast player-left notification and updated assignments so other clients know
         if (this.isHost) {
+          this.broadcastPlayerLeft(conn.peer, leftPlayerColors);
           this.broadcastPlayerAssignments();
         }
       }
@@ -557,6 +620,10 @@ class NetworkManager {
       case 'join-accepted':
         // Client received color assignment (can be multiple colors for local multiplayer)
         this.playerAssignments = data.playerAssignments;
+        this.gameInProgress = data.gameInProgress || false;
+        if (data.gameState) {
+          this.lastKnownGameState = data.gameState;
+        }
         const myColors = this.playerAssignments[this.localPlayerId] || [];
         // Save session for potential rejoin
         this.updateSessionInfo();
@@ -565,7 +632,9 @@ class NetworkManager {
             roomCode: this.roomCode,
             peerId: this.localPlayerId,
             assignedColors: myColors,
-            playerAssignments: data.playerAssignments
+            playerAssignments: data.playerAssignments,
+            gameInProgress: data.gameInProgress || false,
+            gameState: data.gameState
           });
           this.pendingJoinResolve = null;
           this.pendingJoinReject = null;
@@ -705,6 +774,14 @@ class NetworkManager {
         }
         break;
 
+      case 'player-left':
+        // A remote player has left the game - notification from host
+        console.log(`Player left notification: ${data.peerId} (${data.colors?.join(', ')})`);
+        if (this.onRemotePlayerLeave) {
+          this.onRemotePlayerLeave(data.peerId, data.colors);
+        }
+        break;
+
       default:
         console.warn('Unknown message type:', data.type);
     }
@@ -749,11 +826,13 @@ class NetworkManager {
 
     console.log(`Assigned ${colorsToAssign.length} colors to ${conn.peer}: ${colorsToAssign.join(', ')}`);
 
-    // Send acceptance with color assignment
+    // Send acceptance with color assignment and game state if in progress
     conn.send({
       type: 'join-accepted',
       assignedColors: colorsToAssign,
-      playerAssignments: this.playerAssignments
+      playerAssignments: this.playerAssignments,
+      gameInProgress: this.gameInProgress,
+      gameState: this.gameInProgress ? this.lastKnownGameState : null
     });
 
     // Notify all other clients of new player
@@ -768,6 +847,21 @@ class NetworkManager {
     const message = {
       type: 'player-assignments-update',
       playerAssignments: this.playerAssignments
+    };
+
+    this.connections.forEach((conn) => {
+      if (conn.open) {
+        conn.send(message);
+      }
+    });
+  }
+
+  // Broadcast that a player has left the game
+  broadcastPlayerLeft(peerId, colors) {
+    const message = {
+      type: 'player-left',
+      peerId: peerId,
+      colors: colors || []
     };
 
     this.connections.forEach((conn) => {
