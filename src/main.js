@@ -316,6 +316,21 @@ function setupNetworkHandlers() {
       updateStatus(reason || 'Action failed.');
     }
   };
+
+  networkManager.onHostDisconnect = () => {
+    debug('Host disconnected, migrating...', 'error');
+    updateStatus('Host disconnected. Migrating to new host...');
+  };
+
+  networkManager.onBecomeHost = (gameState) => {
+    debug('This device is now the host!', 'success');
+    updateStatus('You are now the host!');
+    // If game was in progress, continue as host
+    if (networkManager.gameInProgress && gameState) {
+      debug('Continuing game as new host', 'info');
+      applyNetworkState(gameState);
+    }
+  };
 }
 
 // ========== Lobby Event Listeners ==========
