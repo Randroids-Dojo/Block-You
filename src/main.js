@@ -90,6 +90,9 @@ const connectionMessage = document.querySelector('#connection-message');
 const lobbyError = document.querySelector('#lobby-error');
 const errorMessage = document.querySelector('#error-message');
 const errorDismissBtn = document.querySelector('#error-dismiss-btn');
+const hostReclaimPrompt = document.querySelector('#host-reclaim-prompt');
+const reclaimYesBtn = document.querySelector('#reclaim-yes-btn');
+const reclaimNoBtn = document.querySelector('#reclaim-no-btn');
 
 // Game elements
 const playerCountSelect = document.querySelector('#player-count');
@@ -189,6 +192,18 @@ function showConnecting(message = 'Connecting...') {
 
 function hideConnecting() {
   connectionStatus.hidden = true;
+}
+
+function showHostReclaimPrompt() {
+  if (hostReclaimPrompt) {
+    hostReclaimPrompt.hidden = false;
+  }
+}
+
+function hideHostReclaimPrompt() {
+  if (hostReclaimPrompt) {
+    hostReclaimPrompt.hidden = true;
+  }
 }
 
 function updatePlayersList(assignments, listEl, localPeerId) {
@@ -345,6 +360,20 @@ function setupNetworkHandlers() {
       updateHostWaitingRoom();
     }
   };
+
+  // Handle notification that a remote player has left (received from host)
+  networkManager.onRemotePlayerLeave = (peerId, colors) => {
+    debug(`Remote player left: ${peerId} (${colors?.join(', ')})`, 'error');
+    const colorNames = colors && colors.length > 0 ? colors.join(', ') : 'Unknown';
+
+    if (networkManager.gameInProgress) {
+      // Show notification in game
+      updateStatus(`${colorNames} has left the game.`);
+    } else {
+      // Update waiting room UI
+      updateClientWaitingRoom();
+    }
+  };
 }
 
 // ========== Lobby Event Listeners ==========
@@ -479,6 +508,10 @@ cancelHostBtn.addEventListener('click', () => {
   showLobbySection('lobby-menu');
 });
 
+// Store pending join info for reclaim flow
+let pendingJoinCode = null;
+let pendingJoinLocalPlayers = 1;
+
 joinBtn.addEventListener('click', async () => {
   const code = roomCodeInput.value.trim().toUpperCase();
   if (code.length !== 6) {
@@ -488,6 +521,75 @@ joinBtn.addEventListener('click', async () => {
 
   const requestedLocalPlayers = Number(joinLocalPlayerCountSelect?.value ?? 1);
   localPlayerCount = requestedLocalPlayers;
+  pendingJoinCode = code;
+  pendingJoinLocalPlayers = requestedLocalPlayers;
+
+  showConnecting('Checking game...');
+
+  try {
+    // Check if we can reclaim host for this room
+    const canReclaim = await networkManager.checkHostReclaimAvailable(code);
+    hideConnecting();
+
+    if (canReclaim) {
+      // Show reclaim prompt
+      debug('Host reclaim available, showing prompt', 'info');
+      showHostReclaimPrompt();
+    } else {
+      // Proceed with regular join
+      await performRegularJoin(code, requestedLocalPlayers);
+    }
+  } catch (err) {
+    hideConnecting();
+    networkManager.cancelHostReclaimCheck();
+    showError(err.message || 'Failed to join game');
+  }
+});
+
+// Handle reclaim yes button
+if (reclaimYesBtn) {
+  reclaimYesBtn.addEventListener('click', async () => {
+    hideHostReclaimPrompt();
+    showConnecting('Reclaiming host...');
+
+    try {
+      setupNetworkHandlers();
+      const result = await networkManager.rejoinAsHost(pendingJoinCode, pendingJoinLocalPlayers);
+      hideConnecting();
+
+      myColors = new Set(result.assignedColors);
+      isMultiplayer = true;
+      expectedPlayerCount = 4;
+
+      roomCodeDisplay.textContent = result.roomCode;
+
+      // Check if game is in progress
+      if (networkManager.gameInProgress && networkManager.lastKnownGameState) {
+        debug('Game in progress, loading game board as reclaimed host...', 'info');
+        startGameWithState(networkManager.lastKnownGameState);
+      } else {
+        updateHostWaitingRoom();
+        showLobbySection('host-waiting');
+      }
+    } catch (err) {
+      hideConnecting();
+      showError(err.message || 'Failed to reclaim host');
+    }
+  });
+}
+
+// Handle reclaim no button - join as regular player
+if (reclaimNoBtn) {
+  reclaimNoBtn.addEventListener('click', async () => {
+    hideHostReclaimPrompt();
+    // Cancel the reclaim peer and do regular join
+    networkManager.cancelHostReclaimCheck();
+    await performRegularJoin(pendingJoinCode, pendingJoinLocalPlayers);
+  });
+}
+
+// Regular join flow (extracted for reuse)
+async function performRegularJoin(code, requestedLocalPlayers) {
   showConnecting('Joining game...');
 
   try {
@@ -510,13 +612,19 @@ joinBtn.addEventListener('click', async () => {
       debug(`Only ${assignedCount} of ${requestedLocalPlayers} requested local players assigned`, 'info');
     }
 
-    updateClientWaitingRoom();
-    showLobbySection('client-waiting');
+    // Check if game is already in progress - go directly to game board
+    if (result.gameInProgress && result.gameState) {
+      debug('Game already in progress, loading game board...', 'info');
+      startGameWithState(result.gameState);
+    } else {
+      updateClientWaitingRoom();
+      showLobbySection('client-waiting');
+    }
   } catch (err) {
     hideConnecting();
     showError(err.message || 'Failed to join game');
   }
-});
+}
 
 leaveGameBtn.addEventListener('click', () => {
   networkManager.disconnect();
